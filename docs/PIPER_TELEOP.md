@@ -8,7 +8,7 @@
 >
 > ```bash
 > source /opt/ros/humble/setup.bash
-> source ~/piper_ros/install/setup.bash
+> source ~/piper_tjp/install/setup.bash
 > ```
 >
 > 详见「完整 50 秒验证流程」第 0 步。
@@ -42,19 +42,22 @@ ros2 run piper piper_teleop --side left --enable
 ## 三个阶段
 
 **对齐**：以 master 的**物理姿态为准**，follower 从自己的姿态移动到与 master 相同的
-姿态。用三次插值（`3t²−2t³`）过渡，两端速度为零，所以起步和停止都没有速度突变。
-**插值只用于这一个阶段**——两臂姿态本来就不同，正是需要平滑过渡的时候。
+姿态。默认用五次最小 jerk 插值（`10t³−15t⁴+6t⁵`）过渡，两端速度、加速度都为零，
+减少启停时激起结构振动的可能。**固定端点插值只用于对齐与回位**——这两个阶段目标
+已知，适合预先规划；实时跟随不会每周期重规划多项式。
 
 **跟随**：对齐完成后，follower 的目标就是 master 的**实时原值**，只经过两处处理：
-越界钳制和默认开启的 One Euro 滤波（见下节）。目标值取自原值，但**能跑多快**另有限制
+越界钳制和默认开启的一阶低通滤波（见下节）。目标值取自原值，但**能跑多快**另有限制
 ——见「跟随速度」一节（结论：瓶颈是 `--speed`，不是固件限速）。
 
 **回位**：运行结束（`--duration` 到时或 Ctrl-C）后，follower 自动回到**启动时它自己
-的姿态**（下称 home）。回位同样是三次插值，时长由位移和速度算出，不设固定时长。
+的姿态**（下称 home）。回位使用同一条五次最小 jerk 曲线，时长由位移、平均速度和
+峰值速度上限算出，不设固定时长。
 
 实测左臂的对齐位移：j4 需移动 16.4°、j6 需移动 6.7°——**这不是微小幅度的动作**，
 所以对齐必须平滑。速度由 `--align-seconds` 决定：**2026-09-23 把默认值从 8 秒改成
-4 秒（2 倍速）**，位移 37° 时峰值约 14 deg/s，仍远低于实测跟随能力 86 deg/s。
+4 秒（2 倍速）**，五次曲线下位移 37° 时峰值约 17.3 deg/s，仍远低于实测跟随能力
+86 deg/s。
 
 对齐期间 **master 的姿态被冻结为轨迹终点**，而且程序一直在判断"操作者是不是已经
 在拖它了"：
@@ -77,14 +80,18 @@ ros2 run piper piper_teleop --side left --enable
 
 | 处理 | 跟随阶段是否启用 | 原因 |
 | --- | --- | --- |
-| 三次插值 | **不启用** | 只在两臂姿态不同（对齐阶段）时才有意义 |
+| 固定端点的五次/三次插值 | **不启用** | 只用于目标已知的对齐与回位；实时跟随不能反复从曲线头部起步 |
 | 越界钳制 | **启用** | 含越界目标的指令行为未定义，绝不能不处理 |
-| One Euro 滤波 | **默认启用**（`--filter one-euro`，可切 `lowpass`/`none`） | 压掉手里的 8~12 Hz 手抖，同时不引入快速拖动时的滞后；见下节 |
-| 死区 | **默认启用**（`--deadband-deg 0.2`，0 关闭） | 小于阈值的变化完全不传递，手停着时目标一动不动；见下节 |
+| 一阶低通滤波 | **默认启用**（`--filter lowpass`、`--filter-tau 0.02`，可切 `one-euro`/`none`） | 当前左臂真机验证后静止不抖，延迟基本不可感知 |
+| 死区 | **默认启用**（`--deadband-deg 0.4`，0 关闭） | 小于阈值的变化完全不传递，手停着时目标保持稳定 |
 | 五次插值平滑 | **默认启用**（`--smooth-bandwidth 15`，0 关闭） | 固定带宽的三阶 jerk 受限环，压掉大幅度移动时的 5~15 Hz 抖动；见下节 |
 | 跳变限制（`--max-step-deg`） | **默认关闭**（值为 0） | 它会削掉 master 的快速动作，让 follower 追不上 |
 
-## 跟随阶段的处理链：死区 → One Euro → 五次插值平滑
+## 跟随阶段的处理链：死区 → 一阶低通 → 五次插值平滑
+
+当前左臂真机验证的默认组合为：一阶低通 `τ=0.02s`、死区 `0.4°`、速度门限
+`1.0 deg/s`、五次插值平滑。该组合在小幅度操作中基本感觉不到延迟，主臂停住时
+从臂不再出现明显抖动。One Euro 仍保留为可选对照方案。
 
 ### 为什么换掉一阶低通
 
@@ -117,7 +124,7 @@ y       = 低通(x, fc)                        # 再用这个截止频率滤位�
 | --- | --- | --- | --- | --- | --- |
 | 一阶低通 τ=0.02s（旧） | 0.146 度 | 0.20 | 0.40 | 0.80 | 2.00 |
 | 一阶低通 τ=0.05s | 0.079 度 | 0.50 | 1.00 | 2.00 | 5.00 |
-| **One Euro（默认参数）** | **0.036 度** | **0.22** | **0.28** | **0.35** | **0.43** |
+| One Euro（离线参考参数） | 0.036 度 | 0.22 | 0.28 | 0.35 | 0.43 |
 
 （单位除标注外均为度，数值来自 `test_piper_feedback.py` 中同一模型的离线计算。）
 
@@ -126,7 +133,7 @@ y       = 低通(x, fc)                        # 再用这个截止频率滤位�
 
 ### 使用与调节
 
-`--filter` 选方案：`one-euro`（默认）、`lowpass`（旧的固定截止低通，留作对照）、
+`--filter` 选方案：`lowpass`（默认）、`one-euro`（可选对照）、
 `none`（不滤波，同步优先）。
 
 调参经验：
@@ -139,7 +146,7 @@ y       = 低通(x, fc)                        # 再用这个截止频率滤位�
 
 One Euro 压的是快抖（5~15 Hz），但它的截止频率在静止时是 1 Hz——**1 Hz 以下的慢晃
 它几乎原样放行**。手扶着重物时那种慢晃正是要消掉的东西，所以在滤波器前面再加一道
-死区（`--deadband-deg`，默认 **0.2 度**）。
+死区（`--deadband-deg`，默认 **0.4 度**）。
 
 **它必须同时看幅度和速度**，只看幅度会有一个致命副作用（2026-09-23 真机暴露）：
 
@@ -148,25 +155,25 @@ One Euro 压的是快抖（5~15 Hz），但它的截止频率在静止时是 1 H
 | 只按幅度（第一版） | 在 **0.18~1.60 deg/s** 之间反复起伏（std 0.42）：慢拖被切成 0.2 度一级的台阶，台阶之间速度归零、落下时又突然加速——操作者的原话是"每一小段速度都会归为零然后重新加速" |
 | **幅度 + 速度门限（现行）** | **恒定 1.00 deg/s**（std 0.00）：只要在动就连续跟随 |
 
-规则：**只有当输入既没有越过幅度阈值、速度又低于 `--deadband-speed`（默认 0.8 deg/s）
+规则：**只有当输入既没有越过幅度阈值、速度又低于 `--deadband-speed`（默认 1.0 deg/s）
 时才保持输出**；一旦在动，锚点跟着走、什么都不保持。速度是这一级自己估的（每周期
 差值再过一道 3 Hz 低通），所以不依赖上游。
 
 | 情形 | 行为 |
 | --- | --- |
 | 手停着（慢晃 ±0.15 度、速度约 0.3~0.5 deg/s） | **输出一动不动** |
-| 慢拖（≥ 0.8 deg/s，含 1 deg/s 的精细定位） | 连续跟随，**速度不归零** |
+| 慢拖（≥ 1.0 deg/s，含 1 deg/s 的精细定位） | 连续跟随，**速度不归零** |
 | 快速拖动 | 死区完全不参与 |
 | 5 Hz 以上的快抖 | 速度门限会放行（它"在动"），由 One Euro 与平滑级压掉 |
 
 代价与边界：
 
 - 速度估计需要约 0.05 秒（3 个周期）建立，所以**从静止起动的头 0.05 秒**仍按旧的
-  幅度规则走，保持量小于 0.2 度；
+  幅度规则走，保持量小于 0.4 度；
 - 前馈通路会漏回约 1/5 的手抖（One Euro 的速度估计在 1 Hz 处仍留 20% 的手抖导数）。
   整条链对 ±0.15 度 5 Hz 手抖的残留约 0.03 度，已在机械臂自身本底（0.011~0.041 度）
   量级，再压就要拿跟手性去换；
-- 停下后目标最多停在离 master 真值 0.2 度的地方（幅度阈值，方向与刚才那次移动一致）。
+- 停下后目标最多停在离 master 真值 0.4 度的地方（幅度阈值，方向与刚才那次移动一致）。
 
 ### 五次插值平滑（jerk 受限级联环）
 
@@ -230,7 +237,7 @@ One Euro 压的是快抖（5~15 Hz），但它的截止频率在静止时是 1 H
 
 ### 两条不变的约束
 
-- **只作用于跟随阶段的 master 读数。** 对齐与回位是规划好的三次插值轨迹，不滤波。
+- **只作用于跟随阶段的 master 读数。** 对齐与回位是规划好的固定端点轨迹，不滤波。
 - **进入跟随的那一刻用当前 master 值初始化滤波器**，否则滤波输出会从 0 开始爬升，
   那本身就是一个真实的起始跳变。**种子取的是最后一次发布的目标**，不是 master 的
   当前值——这样即使对齐期间 master 被拖走很远，命令流也是连续的，偏差由滤波输出
@@ -248,7 +255,7 @@ home 就是**本程序启动时 follower 的姿态**，自动记录，没有配�
 | 触发 | `--duration` 到时、Ctrl-C（`--no-return-home` 可完全关掉） |
 | 起点 | 最后一次发布的跟随目标（命令流连续）；干跑时 follower 不动，用它预览真实运行的计划 |
 | 时长 | 由位移和速度算出，**不设固定时长** |
-| 曲线 | 三次插值 `3u²−2u³`，两端速度为零 |
+| 曲线 | 默认五次最小 jerk `10u³−15u⁴+6u⁵`，两端速度、加速度为零；可切回旧三次 |
 | 读 master | **不读**，回位是独立动作 |
 | 使能校验 | 回位前、回位中每周期都校验整臂 ENABLED |
 | 第二个 Ctrl-C | 立即中止回位，机械臂停在原地 |
@@ -256,17 +263,18 @@ home 就是**本程序启动时 follower 的姿态**，自动记录，没有配�
 时长公式：`Δmax = max|home − 起点|`，然后
 
 ```
-T = max( Δmax / --return-speed , 1.5 × Δmax / --return-max-peak )
-u = t / T      s = 3u² − 2u³      目标 = 起点 + s × (home − 起点)
+κ = 1.875（quintic）或 1.5（cubic）
+T = max( Δmax / --return-speed , κ × Δmax / --return-max-peak )
+u = t / T      s = 10u³ − 15u⁴ + 6u⁵      目标 = 起点 + s × (home − 起点)
 ```
 
-三次插值的峰值速度是平均速度的 1.5 倍，所以 `--return-speed`（平均）与
-`--return-max-peak`（峰值上限）各管一头，谁更紧谁决定时长。默认 10 deg/s 与
-15 deg/s 恰好等价；峰值默认值 15 deg/s 远低于实测跟随能力 86 deg/s，所以默认配置
-不会撞上限。
+五次最小 jerk 的峰值速度是平均速度的 1.875 倍（旧三次为 1.5 倍），所以
+`--return-speed`（平均）与 `--return-max-peak`（峰值上限）各管一头，谁更紧谁决定
+时长。默认 10 deg/s 与 15 deg/s 下由峰值约束决定，规划器会自动延长 25%；峰值仍严格
+不超过 15 deg/s，远低于实测跟随能力 86 deg/s。
 
-**默认回位与对齐快慢相当**：对齐默认 4 秒走完几十度（峰值约 14 deg/s），回位按
-10 deg/s 平均、15 deg/s 峰值算，同样位移约 3.7 秒。空间紧、或想让回位更柔和时，
+**默认回位与对齐快慢相当**：对齐默认 4 秒走完几十度；回位按 10 deg/s 平均、
+15 deg/s 峰值算。五次曲线下 37 度回位约 4.6 秒。空间紧、或想让回位更柔和时，
 把这两个参数调小即可——**时长会自动变长，不需要另设时间**。
 
 回位目标同样过 `clamp_targets`：home 若落在可指令范围外（例如启动时 follower 失能
@@ -581,8 +589,11 @@ ros2 run piper piper_enable_check --port can_fr --expect disabled
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/piper_ros/install/setup.bash
+source ~/piper_tjp/install/setup.bash
 ```
+
+当前实验机已经实测确认：左主臂使用 `can_ml`，左从臂使用 `can_fl`。不同机器的
+USB-CAN 接口可能不同，启动前应以 `can_port` 参数和只读监视结果为准。
 
 **工具一律用 `ros2 run piper <工具名>` 启动。** ROS 2 不会把包的可执行目录加进 `PATH`，
 直接写 `piper_teleop --side left` 会得到 `command not found`（实测，2026-09-23）。
@@ -597,7 +608,7 @@ ros2 pkg executables piper
 构建：
 
 ```bash
-cd ~/piper_ros && colcon build --symlink-install
+cd ~/piper_tjp && colcon build --symlink-install
 ```
 
 构建是增量的，几秒钟；`--symlink-install` 让 Python 文件改动无需重新构建即可生效，
@@ -620,13 +631,13 @@ ros2 topic echo /arm_enable_status_left --once      # 期望 all_enabled: true
 若接口名不对（例如某块适配器重插后变成 `can0`），先用仓库根目录的脚本按 USB 口重命名：
 
 ```bash
-cd /home/mips/piper_ros && sudo bash can_muti_activate.sh
+cd /home/mips/piper_tjp && sudo bash can_muti_activate.sh
 ```
 
 ### 1. 起记录（第一个终端）
 
 ```bash
-source /opt/ros/humble/setup.bash && source ~/piper_ros/install/setup.bash
+source /opt/ros/humble/setup.bash && source ~/piper_tjp/install/setup.bash
 ros2 run piper piper_teleop_verify --duration 70
 # 默认记录 can_fl(master_left) 与 can_fr(follower_left) 到 /tmp/piper_teleop_verify.csv
 # 记录时长要比遥操作长（遥操作 50 秒 + 启动 3 秒 + 对齐 4 秒 + 回位约 10 秒）
@@ -639,7 +650,7 @@ ros2 run piper piper_teleop_verify --duration 70
 **新终端同样要先 source**（见第 0 步），否则找不到 piper 包：
 
 ```bash
-source /opt/ros/humble/setup.bash && source ~/piper_ros/install/setup.bash
+source /opt/ros/humble/setup.bash && source ~/piper_tjp/install/setup.bash
 ros2 run piper piper_teleop --side left --enable --duration 50
 ```
 
@@ -678,7 +689,7 @@ ros2 run piper piper_teleop_verify --analyze /tmp/piper_teleop_verify.csv
 | 试过的做法 | 结果 |
 | --- | --- |
 | 一阶低通（τ=0.02s）替代 One Euro | 8~12 Hz 手抖只衰减约 30%，弃用 |
-| 每周期重规划五次多项式（静止到静止） | 匀速拖动时滞后发散（100 deg/s 时 59 度、150 时 389 度） |
+| **实时跟随阶段**每周期重规划五次多项式（静止到静止） | 匀速拖动时滞后发散（100 deg/s 时 59 度、150 时 389 度）；不影响固定端点的对齐/回位使用五次曲线 |
 | 同上加"可停速度上限" | 急停/反向时冲过目标 66~86 度 |
 | 同上加目标速度前馈 | 每周期只走到曲线最平缓的开头，速度起不来 |
 | 七段式 S 曲线（时间最优加速度 + jerk 限幅） | 同一流水线下滞后 3.65 度 vs 现行 2.00 度、抖动 0.088 vs 0.029——**两个方向都更差** |
@@ -697,12 +708,13 @@ ros2 run piper piper_teleop_verify --analyze /tmp/piper_teleop_verify.csv
 | `--side` | `left` | 驱动哪台 follower |
 | `--master-topic` | `/joint_states_single` | master 关节角度话题 |
 | `--align-seconds` | 4.0 | 对齐时长；位移不变时它直接决定速度（4 秒 ≈ 2 倍速） |
+| `--trajectory-profile` | `quintic` | 对齐与回位轨迹：`quintic` 为五次最小 jerk（默认），`cubic` 为旧三次插值回退 |
 | `--max-step-deg` | 0（关闭） | 削掉信号跳变；默认关闭以保证同步 |
 | `--speed` | 100 | follower 速度百分比 1–100；节点把它转发给 `MotionCtrl_2`，是**对整臂最大速度（3 rad/s ≈ 172 deg/s）的缩放**。100 = 不额外限速，改小它等于加一道软件限速 |
 | `--rate` | 50 | 发布频率 Hz（跟随与回位共用） |
-| `--filter` | `one-euro` | 跟随阶段滤波方案：`one-euro` / `lowpass`（对照）/ `none` |
-| `--deadband-deg` | 0.2 | 死区幅度阈值，度；0 关闭死区 |
-| `--deadband-speed` | 0.8 | 死区速度门限 deg/s：低于它才认为手停着；0 表示只按幅度保持 |
+| `--filter` | `lowpass` | 跟随阶段滤波方案：`lowpass` / `one-euro` / `none` |
+| `--deadband-deg` | 0.4 | 死区幅度阈值，度；0 关闭死区 |
+| `--deadband-speed` | 1.0 | 死区速度门限 deg/s：低于它才认为手停着；0 表示只按幅度保持 |
 | `--smooth-bandwidth` | 15 | 五次插值平滑的带宽 rad/s；0 关闭这一级 |
 | `--smooth-max-velocity` | 172 | 平滑级的速度上限 deg/s |
 | `--smooth-max-acceleration` | 6000 | 平滑级的加速度上限 deg/s² |

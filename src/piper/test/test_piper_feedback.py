@@ -7,6 +7,7 @@ import pytest
 import numpy as np
 
 from piper.piper_feedback import (
+    CUBIC_PROFILE,
     DEFAULT_FILTER_TAU_S,
     DEFAULT_SMOOTH_MAX_ACCELERATION_DEG_S2,
     DEFAULT_SMOOTH_MAX_JERK_DEG_S3,
@@ -23,6 +24,8 @@ from piper.piper_feedback import (
     LowPassFilter,
     MotionSmoother,
     OneEuroFilter,
+    QUINTIC_PEAK_FACTOR,
+    QUINTIC_PROFILE,
     decode,
     align_targets,
     clamp_targets,
@@ -34,7 +37,9 @@ from piper.piper_feedback import (
     limit_step,
     out_of_limits,
     plan_return,
+    quintic_step,
     return_duration,
+    trajectory_peak_factor,
 )
 
 ALL_ON = (True,) * JOINT_COUNT
@@ -261,6 +266,25 @@ def test_cubic_step_clamps_outside_the_unit_interval():
     assert cubic_step(2.0) == 1.0
 
 
+def test_quintic_step_has_zero_velocity_and_acceleration_at_both_ends():
+    assert quintic_step(0.0) == 0.0
+    assert quintic_step(1.0) == 1.0
+    assert quintic_step(0.5) == pytest.approx(0.5)
+    # 五次曲线在端点还把加速度降为零，因此起步比三次曲线更平。
+    assert quintic_step(0.01) < cubic_step(0.01)
+    assert 1.0 - quintic_step(0.99) < 1.0 - cubic_step(0.99)
+
+
+def test_quintic_step_clamps_outside_the_unit_interval():
+    assert quintic_step(-1.0) == 0.0
+    assert quintic_step(2.0) == 1.0
+
+
+def test_trajectory_profiles_have_the_correct_peak_factors():
+    assert trajectory_peak_factor(CUBIC_PROFILE) == pytest.approx(1.5)
+    assert trajectory_peak_factor(QUINTIC_PROFILE) == pytest.approx(1.875)
+
+
 def _pose(value):
     return {i + 1: float(value) for i in range(JOINT_COUNT)}
 
@@ -290,6 +314,13 @@ def test_alignment_preserves_each_joint_independently():
     mid = align_targets(follower, master, 0.5)
     for joint in range(1, JOINT_COUNT + 1):
         assert mid[joint] == pytest.approx(joint * 10 * 0.5)
+
+
+def test_alignment_keeps_the_cubic_profile_as_a_fallback():
+    follower = _pose(0.0)
+    master = _pose(60.0)
+    assert align_targets(follower, master, 0.25,
+                         CUBIC_PROFILE)[1] == pytest.approx(9.375)
 
 
 def test_targets_are_clamped_into_the_commandable_range():
@@ -401,21 +432,26 @@ def test_other_frames_and_short_payloads_are_not_limits():
 
 
 def test_return_duration_follows_the_average_speed():
-    # 默认两个约束等价（1.5 * 10 == 15），把峰值放宽后只剩平均速度约束。
-    assert return_duration(30.0, 10.0, 15.0) == pytest.approx(3.0)
+    # 五次曲线峰值系数 1.875；默认峰值上限更紧，把它放宽后才只剩平均速度约束。
+    assert return_duration(30.0, 10.0, 15.0) == pytest.approx(3.75)
     assert return_duration(30.0, 10.0, 100.0) == pytest.approx(3.0)
 
 
 def test_return_duration_is_capped_by_the_peak_ceiling():
-    # 峰值上限比平均速度更紧时（peak < 1.5*speed），时长由 1.5*Δmax/peak 决定。
-    assert return_duration(30.0, 10.0, 5.0) == pytest.approx(9.0)
+    # 峰值上限比平均速度更紧时，时长由 1.875*Δmax/peak 决定。
+    assert return_duration(30.0, 10.0, 5.0) == pytest.approx(11.25)
     # 反过来平均速度更紧时，时长由 Δmax/speed 决定。
     assert return_duration(30.0, 1.0, 5.0) == pytest.approx(30.0)
     # 两个方向都不越界：任何一对参数下平均速度与峰值都不超过各自的上限。
     for speed, peak in ((10.0, 5.0), (1.0, 5.0), (2.0, 3.0), (10.0, 15.0)):
         duration = return_duration(30.0, speed, peak)
         assert 30.0 / duration <= speed + 1e-9
-        assert 1.5 * 30.0 / duration <= peak + 1e-9
+        assert QUINTIC_PEAK_FACTOR * 30.0 / duration <= peak + 1e-9
+
+
+def test_return_duration_keeps_the_cubic_profile_as_a_fallback():
+    assert return_duration(30.0, 10.0, 15.0,
+                           CUBIC_PROFILE) == pytest.approx(3.0)
 
 
 def test_return_duration_is_zero_when_nothing_moved():
@@ -435,10 +471,12 @@ def test_return_plan_reports_displacement_duration_and_peak():
     home = _pose(12.0)
     plan = plan_return(start, home, speed_deg_s=10.0, max_peak_deg_s=15.0)
     assert plan.max_delta_deg == pytest.approx(12.0)
-    assert plan.duration == pytest.approx(1.2)
-    # 三次插值的峰值是平均值的 1.5 倍：12 度 / 1.2s 平均 10 deg/s，峰值 15。
+    assert plan.duration == pytest.approx(1.5)
+    # 五次最小 jerk 的峰值系数为 1.875，规划器延长时长后仍严格卡在 15 deg/s。
     assert plan.peak_deg_s == pytest.approx(15.0)
     assert plan.deltas_deg[1] == pytest.approx(12.0)
+    assert plan.profile == QUINTIC_PROFILE
+    assert plan.peak_factor == pytest.approx(QUINTIC_PEAK_FACTOR)
 
 
 def test_return_plan_uses_each_joint_s_own_displacement():
@@ -448,7 +486,7 @@ def test_return_plan_uses_each_joint_s_own_displacement():
     assert plan.max_delta_deg == pytest.approx(7.5)
     assert plan.deltas_deg == pytest.approx(home)
     # 时长由位移最大的关节决定，其余关节只是跟着这个时长走。
-    assert plan.duration == pytest.approx(7.5 / 10.0)
+    assert plan.duration == pytest.approx(1.875 * 7.5 / 15.0)
 
 
 def test_return_plan_flags_joints_the_path_would_clamp():
@@ -505,6 +543,14 @@ def test_filter_first_step_of_a_step_input_is_dx_times_dt_over_tau():
     first = flt.update({1: 10.0}, dt=dt)[1]
     assert first == pytest.approx(10.0 * dt / (tau + dt))
     assert first / dt == pytest.approx(10.0 / tau, rel=0.05)
+
+
+def test_low_pass_exposes_the_filtered_velocity_for_feed_forward():
+    flt = LowPassFilter(tau=0.02)
+    flt.reset({1: 0.0})
+    flt.update({1: 1.0}, dt=0.02)
+    # 输出从 0 变到 0.5 度，供后级平滑使用的速度应为输出的导数。
+    assert flt.velocities()[1] == pytest.approx(25.0)
 
 
 def test_filter_approaches_the_sample_without_overshooting():

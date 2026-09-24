@@ -94,6 +94,7 @@ def _options(**overrides):
             piper_teleop.DEFAULT_SMOOTH_MAX_ACCELERATION_DEG_S2),
         smooth_max_jerk=piper_teleop.DEFAULT_SMOOTH_MAX_JERK_DEG_S3,
         align_seconds=0.1, duration=0.4, max_step_deg=0.0,
+        trajectory_profile=piper_teleop.DEFAULT_TRAJECTORY_PROFILE,
         return_speed=10.0, return_max_peak=15.0, no_return_home=False)
     for name, value in overrides.items():
         setattr(options, name, value)
@@ -372,9 +373,8 @@ def _follow_run(monkeypatch, **overrides):
 
 
 def test_a_small_hand_wobble_moves_nothing(monkeypatch):
-    # 死区默认 0.2 度：手"停着"时目标一动不动。这里的手抖取 5 Hz、±0.15 度
-    # ——它低于死区，却是 One Euro 的 1 Hz 截止频率压不干净的那一段。
-    assert piper_teleop.DEFAULT_DEADBAND_DEG == 0.2
+    # 真机验证后的默认死区为 0.4 度：手"停着"时目标一动不动。
+    assert piper_teleop.DEFAULT_DEADBAND_DEG == 0.4
 
     clock = FakeClock()
     monkeypatch.setattr(piper_teleop, 'time', clock)
@@ -447,15 +447,13 @@ def test_a_large_move_still_goes_through_the_deadband(monkeypatch):
     assert series[-1] > 29.9
 
 
-def test_follow_phase_uses_one_euro_by_default(monkeypatch):
-    # 用户报告：--speed 100 之后 follower 把 8~12 Hz 的手抖也复现了出来，而固定
-    # 截止的一阶低通做不到"既压手抖又不滞后"。默认方案因此换成 One Euro。
-    assert piper_teleop.DEFAULT_FILTER == 'one-euro'
+def test_follow_phase_uses_validated_low_pass_by_default(monkeypatch):
+    # 真机验证结果：固定低通配合 0.4 度死区时静止不抖，且延迟基本不可感知。
+    assert piper_teleop.DEFAULT_FILTER == 'lowpass'
     summary, after_step = _follow_run(monkeypatch)
     assert summary.mode == 'follow'
-    # 阶跃会立刻把截止频率顶开，所以第一拍走得比固定低通更远（滞后更小），
-    # 但仍不是原值——静止时它压掉的手抖是后者的四倍（见 test_piper_feedback）。
-    assert 5.0 < after_step[0] < 10.0
+    # 实测间隔正好等于 τ，第一拍走到中点。
+    assert after_step[0] == pytest.approx(5.0, abs=1e-6)
     assert all(a <= b + 1e-9 for a, b in zip(after_step, after_step[1:]))
     assert after_step[-1] > 9.99
 

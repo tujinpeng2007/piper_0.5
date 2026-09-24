@@ -397,14 +397,45 @@ def cubic_step(progress):
     return progress * progress * (3.0 - 2.0 * progress)
 
 
-def align_targets(start_deg, goal_deg, progress):
+def quintic_step(progress):
     """
-    Interpolate a whole pose from start to goal along the cubic S-curve.
+    Minimum-jerk easing with zero velocity and acceleration at both ends.
+
+    Compared with :func:`cubic_step`, this fifth-order S-curve also makes the
+    acceleration continuous at the start and finish.  That removes the
+    acceleration step which can excite a real arm during alignment/return.
+    """
+    if progress <= 0.0:
+        return 0.0
+    if progress >= 1.0:
+        return 1.0
+    return progress ** 3 * (10.0 + progress * (-15.0 + 6.0 * progress))
+
+
+CUBIC_PROFILE = 'cubic'
+QUINTIC_PROFILE = 'quintic'
+TRAJECTORY_PROFILES = (QUINTIC_PROFILE, CUBIC_PROFILE)
+DEFAULT_TRAJECTORY_PROFILE = QUINTIC_PROFILE
+
+
+def trajectory_step(progress, profile=DEFAULT_TRAJECTORY_PROFILE):
+    """Evaluate the selected fixed-endpoint trajectory profile."""
+    if profile == QUINTIC_PROFILE:
+        return quintic_step(progress)
+    if profile == CUBIC_PROFILE:
+        return cubic_step(progress)
+    raise ValueError(f'unknown trajectory profile: {profile}')
+
+
+def align_targets(start_deg, goal_deg, progress,
+                  profile=DEFAULT_TRAJECTORY_PROFILE):
+    """
+    Interpolate a whole pose from start to goal along the selected S-curve.
 
     ``progress`` is the fraction of the alignment move already elapsed, so 0
     yields exactly ``start_deg`` and 1 yields exactly ``goal_deg``.
     """
-    fraction = cubic_step(progress)
+    fraction = trajectory_step(progress, profile)
     return {
         joint: start_deg[joint]
         + fraction * (goal_deg[joint] - start_deg[joint])
@@ -452,13 +483,26 @@ def limit_step(targets_deg, previous_deg, max_step_deg):
     return stepped, limited
 
 
-# The cubic S-curve used for the alignment move peaks at 1.5 times the average
-# speed of the same displacement (the derivative of 3t^2-2t^3 reaches 1.5 at
-# t=0.5), so a move of D degrees spread over T seconds never exceeds 1.5*D/T.
+# The normalized peak velocity is the maximum derivative of each easing curve.
+# Cubic peaks at 1.5; quintic minimum-jerk peaks at 1.875.  Return duration must
+# use the matching factor or changing profiles could silently violate the peak
+# speed limit.
 CUBIC_PEAK_FACTOR = 1.5
+QUINTIC_PEAK_FACTOR = 1.875
+
+
+def trajectory_peak_factor(profile=DEFAULT_TRAJECTORY_PROFILE):
+    """Return peak-speed / average-speed for a trajectory profile."""
+    if profile == QUINTIC_PROFILE:
+        return QUINTIC_PEAK_FACTOR
+    if profile == CUBIC_PROFILE:
+        return CUBIC_PEAK_FACTOR
+    raise ValueError(f'unknown trajectory profile: {profile}')
+
+
 # Return-home defaults: 10 deg/s average and a 15 deg/s peak ceiling, which
-# happen to imply the same duration because 1.5 * 10 == 15.  They are two
-# independent knobs rather than one, so either can be tightened on its own.
+# are two independent knobs.  With the default quintic profile the peak ceiling
+# is tighter (1.875 * 10 > 15), so the planner automatically lengthens the move.
 DEFAULT_RETURN_SPEED_DEG_S = 10.0
 DEFAULT_RETURN_MAX_PEAK_DEG_S = 15.0
 # Samples taken along the return path when reporting which joints the driver
@@ -480,38 +524,43 @@ MEASURED_MAX_JOINT_SPD_DEG_S = 86.0
 
 def return_duration(max_delta_deg,
                     speed_deg_s=DEFAULT_RETURN_SPEED_DEG_S,
-                    max_peak_deg_s=DEFAULT_RETURN_MAX_PEAK_DEG_S) -> float:
+                    max_peak_deg_s=DEFAULT_RETURN_MAX_PEAK_DEG_S,
+                    profile=DEFAULT_TRAJECTORY_PROFILE) -> float:
     """
-    Seconds a cubic return move of ``max_delta_deg`` should take.
+    Seconds a selected-profile return move of ``max_delta_deg`` should take.
 
     The move has no fixed duration: it falls out of the distance and the two
     speed limits.  The average speed implies ``distance / speed`` seconds and
-    the peak ceiling implies ``1.5 * distance / peak``; the longer of the two
-    wins, so neither limit is exceeded.
+    the peak ceiling implies ``peak_factor * distance / peak``; the longer of
+    the two wins, so neither limit is exceeded.
     """
     if speed_deg_s <= 0.0 or max_peak_deg_s <= 0.0:
         raise ValueError('speed and peak limits must be positive')
     if max_delta_deg <= 0.0:
         return 0.0
+    peak_factor = trajectory_peak_factor(profile)
     return max(max_delta_deg / speed_deg_s,
-               CUBIC_PEAK_FACTOR * max_delta_deg / max_peak_deg_s)
+               peak_factor * max_delta_deg / max_peak_deg_s)
 
 
 @dataclass(frozen=True)
 class ReturnPlan:
-    """A cubic move from the pose a run ended in back to its home pose."""
+    """A smooth move from the pose a run ended in back to its home pose."""
 
     deltas_deg: Dict[int, float]
     max_delta_deg: float
     duration: float
     peak_deg_s: float
     clamped_deg: Dict[int, float]
+    profile: str
+    peak_factor: float
 
 
 def plan_return(start_deg, home_deg,
                 speed_deg_s=DEFAULT_RETURN_SPEED_DEG_S,
                 max_peak_deg_s=DEFAULT_RETURN_MAX_PEAK_DEG_S,
-                samples: int = RETURN_PATH_SAMPLES) -> ReturnPlan:
+                samples: int = RETURN_PATH_SAMPLES,
+                profile=DEFAULT_TRAJECTORY_PROFILE) -> ReturnPlan:
     """
     Describe the return move before any of it is executed.
 
@@ -527,10 +576,12 @@ def plan_return(start_deg, home_deg,
         joint: home_deg[joint] - start_deg[joint] for joint in start_deg
     }
     max_delta = max((abs(delta) for delta in deltas.values()), default=0.0)
-    duration = return_duration(max_delta, speed_deg_s, max_peak_deg_s)
+    peak_factor = trajectory_peak_factor(profile)
+    duration = return_duration(max_delta, speed_deg_s, max_peak_deg_s,
+                               profile)
     clamped: Dict[int, float] = {}
     for step in range(samples + 1):
-        path = align_targets(start_deg, home_deg, step / samples)
+        path = align_targets(start_deg, home_deg, step / samples, profile)
         _, limited = clamp_targets(path)
         for joint, correction in limited.items():
             clamped[joint] = max(clamped.get(joint, 0.0), abs(correction))
@@ -538,24 +589,24 @@ def plan_return(start_deg, home_deg,
         deltas_deg=deltas,
         max_delta_deg=max_delta,
         duration=duration,
-        peak_deg_s=(CUBIC_PEAK_FACTOR * max_delta / duration
+        peak_deg_s=(peak_factor * max_delta / duration
                     if duration > 0.0 else 0.0),
         clamped_deg=clamped,
+        profile=profile,
+        peak_factor=peak_factor,
     )
 
 
 # Time constant of the follow-phase low-pass filter, in seconds.
 DEFAULT_FILTER_TAU_S = 0.02
 # Deadband, in degrees, applied to the follow-phase master reading before it
-# reaches the filter.  Any move smaller than this is not passed on at all, so
-# the follower holds perfectly still instead of echoing a hand that is
-# nominally resting: One Euro already flattens the 5-15 Hz band, but a slow
-# wobble below its 1 Hz cutoff still gets through.  The cost is that the
-# target may sit up to this far from the master's true angle after a move.
-DEFAULT_DEADBAND_DEG = 0.2
-# 速度门限：输入速度低于它才认为"手停着"。实测手在静止时的慢晃（0.5 Hz、±0.15 度）
-# 速度约 0.47 deg/s，而人刻意慢拖至少有 1 deg/s 量级，所以 0.8 能把两者分开。
-DEFAULT_DEADBAND_SPEED_DEG_S = 0.8
+# reaches the filter.  These values were validated on the physical left-arm
+# setup: the resting follower stopped visibly trembling without noticeable
+# delay during small deliberate moves.
+DEFAULT_DEADBAND_DEG = 0.4
+# 速度门限：输入速度低于它才认为"手停着"。实测真机上 1.0 deg/s 能把静止慢晃
+# 与有意的小幅拖动区分开，同时不产生明显的粘滞感。
+DEFAULT_DEADBAND_SPEED_DEG_S = 1.0
 # One Euro filter defaults (Casiez et al., CHI 2012).  The cutoff is
 # ``min_cutoff + beta * speed`` in Hz and deg/s, so beta is the adaptive part:
 # 0.3 Hz per deg/s.  Chosen from a measured comparison at 50 Hz against a
@@ -851,11 +902,23 @@ class LowPassFilter:
             raise ValueError('tau must not be negative')
         self.tau = float(tau)
         self._state: Dict[int, float] = {}
+        self._velocity: Dict[int, float] = {}
 
     def reset(self, values):
         """Seed the filter with a reading so the first output has no jump."""
         self._state = dict(values)
+        self._velocity = {joint: 0.0 for joint in values}
         return dict(self._state)
+
+    def velocities(self):
+        """Return the velocity of the filtered output, in degrees per second.
+
+        The jerk-limited smoothing stage uses this as feed-forward.  Keeping
+        it as the derivative of the filtered output makes the low-pass path
+        expose the same interface as :class:`OneEuroFilter` without injecting
+        the unfiltered input derivative.
+        """
+        return dict(self._velocity)
 
     def update(self, values, dt: float):
         """Advance the filter by ``dt`` seconds and return the smoothed values."""
@@ -872,6 +935,11 @@ class LowPassFilter:
             previous = self._state.get(joint)
             value = (sample if previous is None
                      else alpha * sample + (1.0 - alpha) * previous)
+            if previous is None or dt <= 0.0:
+                velocity = 0.0
+            else:
+                velocity = (value - previous) / dt
             self._state[joint] = value
+            self._velocity[joint] = velocity
             smoothed[joint] = value
         return smoothed

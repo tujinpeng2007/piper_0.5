@@ -10,20 +10,20 @@
 #    最终处于同一物理姿态。代价是初始姿态不同时 follower 要做一次较大的移动
 #    （实测左臂 j6 差 66.7 度、j4 差 10.4 度），所以对齐阶段是必需的。
 #
-# 2. 对齐阶段用三次插值过渡。取 3t^2-2t^3，它在两端速度为零，因此起始和结束都
-#    没有速度突变。对齐期间 master 的姿态被冻结为轨迹终点；若 master 被移动超过
-#    阈值，会自动以新姿态重新对齐，避免对齐结束时突然跳过去。
+# 2. 对齐阶段默认用五次最小 jerk 插值过渡。它在两端速度、加速度都为零，比三次
+#    插值少一道加速度突变；三次插值保留为对照/回退。对齐期间 master 的姿态被冻结
+#    为轨迹终点；若 master 被移动超过阈值，会自动以新姿态重新对齐。
 #
 # 3. 结束回位（默认开启）。home 是本程序启动时 follower 的姿态，自动记录、没有
-#    配置参数。--duration 到时和 Ctrl-C 都会触发回位；回位用同一套三次插值，时长
-#    由位移和回位速度算出，不设固定时长。回位期间再按一次 Ctrl-C 会立即停在原地。
+#    配置参数。--duration 到时和 Ctrl-C 都会触发回位；回位用同一套选定轨迹，时长
+#    由位移、曲线峰值系数和回位速度算出。回位期间再按一次 Ctrl-C 会立即停在原地。
 #
 # 安全提醒：Ctrl-C 之后机械臂仍在运动，这是本工具唯一「按了键还在动」的行为，
 # 所以回位开始时必须打印醒目提示（见 _run_return_home）。--no-return-home 可以
 # 完全关掉回位。
 #
-# 跟随阶段默认带一道低通滤波（--filter-tau），它只平滑形状、不限制幅度；关节速度
-# 上限由驱动器的 max_joint_spd 决定，不在这里。
+# 跟随阶段默认带一道一阶低通滤波（--filter-tau），它只平滑形状、不限制幅度；关节
+# 速度上限由驱动器的 max_joint_spd 决定，不在这里。
 #
 # 默认是干跑：打印两臂姿态、所需对齐位移、回位计划，不发送任何内容。必须显式加
 # --enable 才真正发布运动指令。
@@ -40,7 +40,6 @@ from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import JointState
 from piper_msgs.msg import PiperEnableStatusMsg
 from piper.piper_feedback import (
-    CUBIC_PEAK_FACTOR,
     DEFAULT_DEADBAND_DEG,
     DEFAULT_DEADBAND_SPEED_DEG_S,
     DEFAULT_FILTER_TAU_S,
@@ -53,8 +52,10 @@ from piper.piper_feedback import (
     DEFAULT_SMOOTH_MAX_ACCELERATION_DEG_S2,
     DEFAULT_SMOOTH_MAX_JERK_DEG_S3,
     DEFAULT_SMOOTH_MAX_VELOCITY_DEG_S,
+    DEFAULT_TRAJECTORY_PROFILE,
     JOINT_COUNT,
     MEASURED_MAX_JOINT_SPD_DEG_S,
+    TRAJECTORY_PROFILES,
     DeadbandGate,
     LowPassFilter,
     MotionSmoother,
@@ -63,13 +64,14 @@ from piper.piper_feedback import (
     clamp_targets,
     limit_step,
     plan_return,
+    trajectory_peak_factor,
 )
 
 JOINT_NAMES = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6',
                'gripper']
 SIDES = {
     'left': ('/joint_ctrl_cmd_left', '/joint_states_left',
-             '/arm_enable_status_left', 'follower_left (can_fr)'),
+             '/arm_enable_status_left', 'follower_left (can_fl)'),
     'right': ('/joint_ctrl_cmd_right', '/joint_states_right',
               '/arm_enable_status_right', 'follower_right (can_ml)'),
 }
@@ -77,7 +79,7 @@ ENABLE_SERVICES = {'left': '/enable_srv_left', 'right': '/enable_srv_right'}
 DEFAULT_MASTER_TOPIC = '/joint_states_single'
 DEFAULT_SIDE = 'left'
 # 对齐时长。位移不变时它直接决定速度：默认 4.0 秒是原先 8.0 秒的两倍速
-# （实测 37 度的对齐位移峰值约 14 deg/s，仍低于实测跟随能力 86 deg/s）。
+# （五次曲线下 37 度的对齐位移峰值约 17.3 deg/s，仍低于实测跟随能力 86 deg/s）。
 DEFAULT_ALIGN_SECONDS = 4.0
 # 0 表示不做跳变限制。同步优先：任何对目标值的改动都会让 follower 与
 # master 不同步，所以默认关闭；需要防异常跳变时才设非零值。
@@ -90,7 +92,12 @@ DEFAULT_MAX_STEP_DEG = 0.0
 DEFAULT_SPEED = 100
 DEFAULT_RATE_HZ = 50.0
 FILTERS = ('one-euro', 'lowpass', 'none')
-DEFAULT_FILTER = 'one-euro'
+# 真机左臂验证结果：固定低通配合 0.4 度死区时，静止不抖且延迟基本不可感知。
+DEFAULT_FILTER = 'lowpass'
+TRAJECTORY_LABELS = {
+    'quintic': '五次最小 jerk 插值',
+    'cubic': '三次插值',
+}
 MIN_ALIGN_SECONDS = 1.0
 # 对齐期间 master 若被移动超过这个量，且**已经停下**，就以新姿态重新对齐。
 REALIGN_THRESHOLD_DEG = 2.0
@@ -184,8 +191,10 @@ def _publish_targets(node, targets_deg, speed):
     node.publisher.publish(command)
 
 
-def _print_alignment_plan(master, follower, align_seconds):
+def _print_alignment_plan(master, follower, align_seconds,
+                          trajectory_profile=DEFAULT_TRAJECTORY_PROFILE):
     """Print the pose difference and the implied peak joint speeds."""
+    peak_factor = trajectory_peak_factor(trajectory_profile)
     print('两臂当前姿态与所需对齐位移（度）：')
     print(f'  {"joint":<7}{"master":>10}{"follower":>10}{"move":>10}'
           f'{"peak":>12}')
@@ -193,11 +202,11 @@ def _print_alignment_plan(master, follower, align_seconds):
     for joint in range(1, JOINT_COUNT + 1):
         delta = master[joint] - follower[joint]
         worst = max(worst, abs(delta))
-        peak = abs(delta) / align_seconds * CUBIC_PEAK_FACTOR
+        peak = abs(delta) / align_seconds * peak_factor
         print(f'  j{joint:<6}{master[joint]:>10.3f}{follower[joint]:>10.3f}'
               f'{delta:>+10.3f}{peak:>10.2f} deg/s')
     print(f'  最大位移 {worst:.3f} 度，在 {align_seconds:g}s 内完成，'
-          f'插值峰值速度约 {worst / align_seconds * CUBIC_PEAK_FACTOR:.2f} deg/s')
+          f'插值峰值速度约 {worst / align_seconds * peak_factor:.2f} deg/s')
     return worst
 
 
@@ -299,7 +308,8 @@ def _run_teleop(node, options):
 
             if mode == 'align':
                 progress = (now - align_started) / options.align_seconds
-                targets = align_targets(align_from, align_goal, progress)
+                targets = align_targets(align_from, align_goal, progress,
+                                        options.trajectory_profile)
                 if progress >= 1.0:
                     # 对齐期间 master 若被动过，目标已经过时。
                     drift = max(
@@ -331,10 +341,10 @@ def _run_teleop(node, options):
                     print('  对齐完成 -> 进入绝对跟随'
                           + _filter_note(options, prefix='，'))
             else:
-                # 跟随阶段的处理顺序：死区 -> One Euro -> 五次插值平滑。
-                # 死区丢掉小于阈值的输入变化（静止时目标完全不动）；One Euro
-                # 压掉高频手抖；平滑级用固定带宽的三阶级联环限制加速度跳变，
-                # 并用 One Euro 的速度估计做前馈，保证跟手不滞后。dt 一律传实测
+                # 跟随阶段的处理顺序：死区 -> 所选滤波器 -> 五次插值平滑。
+                # 死区丢掉小于阈值的输入变化（静止时目标完全不动）；滤波器
+                # 压掉输入抖动；平滑级用固定带宽的三阶级联环限制加速度跳变，
+                # 并用滤波器的速度估计做前馈，保证跟手不滞后。dt 一律传实测
                 # 循环间隔而不是设定周期：实际周期会波动，用设定值会让截止频率
                 # 跟着它一起变。
                 cycle = 0.0 if dt is None else dt
@@ -414,7 +424,7 @@ def _print_return_plan(start, home, plan):
     print(f'  {"joint":<7}{"start":>10}{"home":>10}{"move":>10}{"peak":>10}')
     for joint in range(1, JOINT_COUNT + 1):
         delta = plan.deltas_deg[joint]
-        peak = (CUBIC_PEAK_FACTOR * abs(delta) / plan.duration
+        peak = (plan.peak_factor * abs(delta) / plan.duration
                 if plan.duration > 0.0 else 0.0)
         mark = '  !!' if joint in plan.clamped_deg else ''
         print(f'  j{joint:<6}{start[joint]:>10.3f}{home[joint]:>10.3f}'
@@ -438,7 +448,7 @@ def _print_return_plan(start, home, plan):
 
 
 def _follow_return_path(node, options, start, home, plan):
-    """Publish the cubic path home; returns False if it had to stop early."""
+    """Publish the selected smooth path home; stop on any safety failure."""
     period = 1.0 / options.rate
     started = time.monotonic()
     loop_count = 0
@@ -456,7 +466,8 @@ def _follow_return_path(node, options, start, home, plan):
             print(f'  !! 回位中止：{error}；机械臂停在当前姿态，不再发指令')
             return False
         progress = (now - started) / plan.duration
-        targets, clamped = clamp_targets(align_targets(start, home, progress))
+        targets, clamped = clamp_targets(
+            align_targets(start, home, progress, plan.profile))
         _publish_targets(node, targets, options.speed)
         if now - last_report >= STATUS_PERIOD:
             actual_hz = loop_count / max(now - last_report, 1e-9)
@@ -488,7 +499,8 @@ def _run_return_home(node, options, home, summary):
         print('  回位中止：没有可用的 follower 姿态，不发送任何指令')
         return
     plan = plan_return(start, home, options.return_speed,
-                       options.return_max_peak)
+                       options.return_max_peak,
+                       profile=options.trajectory_profile)
     print()
     print('=' * 72)
     if options.enable:
@@ -536,6 +548,10 @@ def _parser():
     parser.add_argument('--align-seconds', type=float,
                         default=DEFAULT_ALIGN_SECONDS,
                         help='对齐阶段时长，秒（默认 %(default)s）')
+    parser.add_argument('--trajectory-profile', choices=TRAJECTORY_PROFILES,
+                        default=DEFAULT_TRAJECTORY_PROFILE,
+                        help='对齐与回位轨迹：quintic 为五次最小 jerk，'
+                             'cubic 为旧三次插值（默认 %(default)s）')
     parser.add_argument('--max-step-deg', type=float,
                         default=DEFAULT_MAX_STEP_DEG,
                         help='可选：每周期目标最大变化，0 表示不限制（默认 %(default)s）')
@@ -651,9 +667,11 @@ def main(args=None):
 
         print()
         _print_alignment_plan(node.master, node.follower,
-                              options.align_seconds)
+                              options.align_seconds,
+                              options.trajectory_profile)
         print()
-        print(f'模式：先在 {options.align_seconds:g}s 内三次插值对齐，'
+        trajectory_label = TRAJECTORY_LABELS[options.trajectory_profile]
+        print(f'模式：先在 {options.align_seconds:g}s 内{trajectory_label}对齐，'
               f'再绝对跟随 master；{options.rate:g} Hz，速度 {options.speed}%'
               + ('' if options.enable else '（干跑，不发送任何内容）'))
         print(_filter_note(options))
