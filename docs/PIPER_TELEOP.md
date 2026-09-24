@@ -25,7 +25,7 @@ follower 的指令话题。
 ```bash
 # 1. master 侧节点（必须显式关掉 auto_enable，见下方陷阱）
 ros2 launch piper start_single_piper.launch.py \
-  can_port:=can_fl auto_enable:=false gripper_exist:=false
+  can_port:=can_ml auto_enable:=false gripper_exist:=false
 
 # 2. follower 侧节点
 ros2 launch piper start_two_piper.launch.py \
@@ -410,10 +410,10 @@ ros2 service call /enable_srv_right piper_msgs/srv/Enable "{enable_request: fals
 
 | 接口 | 角色 | j2 | j3 | 其余关节 | max_joint_spd |
 | --- | --- | --- | --- | --- | --- |
-| `can_fl` | master_left | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
+| `can_ml` | master_left | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
 | `can_mr` | master_right | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
-| `can_fr` | follower_left | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
-| `can_ml` | follower_right | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
+| `can_fl` | follower_left | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
+| `can_fr` | follower_right | [−2.0, 180] | [−170, 2.0] | 出厂值 | 300 |
 
 ### 回滚命令
 
@@ -639,7 +639,7 @@ cd /home/mips/piper_tjp && sudo bash can_muti_activate.sh
 ```bash
 source /opt/ros/humble/setup.bash && source ~/piper_tjp/install/setup.bash
 ros2 run piper piper_teleop_verify --duration 70
-# 默认记录 can_fl(master_left) 与 can_fr(follower_left) 到 /tmp/piper_teleop_verify.csv
+# 默认记录 can_ml(master_left) 与 can_fl(follower_left) 到 /tmp/piper_teleop_verify.csv
 # 记录时长要比遥操作长（遥操作 50 秒 + 启动 3 秒 + 对齐 4 秒 + 回位约 10 秒）
 ```
 

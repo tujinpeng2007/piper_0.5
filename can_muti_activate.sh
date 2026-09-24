@@ -1,15 +1,15 @@
 #!/bin/bash
 declare -A USB_PORTS 
 
-# Pi05 four-arm mapping confirmed from physical arm identification.
-# left master
-USB_PORTS["1-11:1.0"]="can_fl:1000000"
-# left follower
-USB_PORTS["1-13:1.0"]="can_fr:1000000"
-# right master
+# 当前实验机四路 USB-CAN 端口与接口名的固定映射。
+# 左主臂
+USB_PORTS["1-11:1.0"]="can_ml:1000000"
+# 左从臂
+USB_PORTS["1-13:1.0"]="can_fl:1000000"
+# 右主臂
 USB_PORTS["1-4:1.0"]="can_mr:1000000"
-# right follower
-USB_PORTS["1-2:1.0"]="can_ml:1000000"
+# 右从臂
+USB_PORTS["1-2:1.0"]="can_fr:1000000"
 
 # Whether to ignore CAN quantity check (default false)
 IGNORE_CHECK=false

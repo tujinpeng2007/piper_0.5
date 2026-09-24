@@ -4,45 +4,26 @@
 
 | 角色 | 接口 | USB 端口 | 波特率 |
 | --- | --- | --- | --- |
-| `master_left` | `can_fl` | `1-11:1.0` | 1 Mbps |
+| `master_left` | `can_ml` | `1-11:1.0` | 1 Mbps |
 | `master_right` | `can_mr` | `1-4:1.0` | 1 Mbps |
-| `follower_left` | `can_fr` | `1-13:1.0` | 1 Mbps |
-| `follower_right` | `can_ml` | `1-2:1.0` | 1 Mbps |
+| `follower_left` | `can_fl` | `1-13:1.0` | 1 Mbps |
+| `follower_right` | `can_fr` | `1-2:1.0` | 1 Mbps |
 
 ## 警告：不要按接口名推断角色
 
-上面四个接口名是本项目自定的（官方 SDK 的脚本用的是 `can_arm1`/`can_arm2`），
-仓库里没有任何文档说明它们的构词规则，而且**这些名字极易被误读**。
-
-字母与角色的实际对应关系如下：
+上面四个接口名是本项目固定的（官方 SDK 的脚本用的是
+`can_arm1`/`can_arm2`）。当前实验机已经通过 USB 端口、适配器序列号和逐臂拖动
+确认了下面的对应关系：
 
 | 接口 | 第 1 位 | 第 2 位 | 实际角色 |
 | --- | --- | --- | --- |
-| `can_fl` | `f` | `l` | `master_left` |
-| `can_fr` | `f` | `r` | `follower_left` |
+| `can_fl` | `f` | `l` | `follower_left` |
+| `can_fr` | `f` | `r` | `follower_right` |
 | `can_mr` | `m` | `r` | `master_right` |
-| `can_ml` | `m` | `l` | `follower_right` |
+| `can_ml` | `m` | `l` | `master_left` |
 
-第 1 位决定左右（`can_f*` 均为 left，`can_m*` 均为 right）。但第 2 位在左右两组
-的含义**相反**：左侧 `l` 为主、`r` 为从，右侧 `r` 为主、`l` 为从。因此这套命名
-不是自洽的编码，`l`/`r` 既不代表固定含义的 left/right，也不代表固定含义的
-master/follower，只看名字无法判断角色。
-
-按最自然的读法（`f`=follower、`m`=master、`l`=left、`r`=right）去解读，四个名字
-里有三个会得出**错误**角色：
-
-| 名字 | 直觉读作 | 实际是 |
-| --- | --- | --- |
-| `can_fl` | follower_left | **`master_left`** |
-| `can_fr` | follower_right | **`follower_left`** |
-| `can_ml` | master_left | **`follower_right`** |
-| `can_mr` | master_right | `master_right` |
-
-其中 `can_ml` 最危险：它会被读成「master left」，实际却是 `follower_right`，
-主从与左右**同时**搞反；`can_fl` 次之，会被当成从臂而实际是主臂。
-
-**因此：一切以本文件与 `config/pi05_can_map.json` 的角色名为准，绝不要从接口名
-反推角色。** 在需要选择机械臂的任何脚本或命令行里，先查这张表。
+当前命名与角色一致，但在其他机器上仍应以 USB 端口和序列号校验结果为准，不能
+仅凭接口名猜测实体机械臂。
 
 `config/pi05_can_map.json` 是权威来源，其对应关系已通过两种独立手段确认：按
 适配器序列号与 USB 端口校验接口身份（`piper_pi05_can verify`），以及逐台拖动
@@ -57,7 +38,7 @@ master/follower，只看名字无法判断角色。
 也不会发送任何 CAN 帧：
 
 ```bash
-cd /home/mips/piper_ros
+cd /home/mips/piper_tjp
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select piper
 source install/setup.bash
@@ -69,8 +50,8 @@ ros2 run piper piper_pi05_can verify follower_right --require-up
 激活全部四路已映射的接口（需要本机管理员权限）：
 
 ```bash
-sudo /usr/bin/python3 /home/mips/piper_ros/src/piper/piper/pi05_can.py \
-  --config /home/mips/piper_ros/config/pi05_can_map.json activate --apply
+sudo /usr/bin/python3 /home/mips/piper_tjp/src/piper/piper/pi05_can.py \
+  --config /home/mips/piper_tjp/config/pi05_can_map.json activate --apply
 ```
 
 这里刻意使用源码文件形式调用：`sudo` 通常会清掉 colcon 的 `PYTHONPATH`，
@@ -80,16 +61,16 @@ sudo /usr/bin/python3 /home/mips/piper_ros/src/piper/piper/pi05_can.py \
 冲突，配置 1 Mbps，并把四路 SocketCAN 链路拉起。它不启动任何 ROS 节点，也不
 发送任何 Piper 运动指令。
 
-例如，在 `can_ml` 上启动右从臂：
+例如，在 `can_fr` 上启动右从臂：
 
 ```bash
 ros2 launch piper start_single_piper.launch.py \
-  can_port:=can_ml auto_enable:=false gripper_exist:=false
+  can_port:=can_fr auto_enable:=false gripper_exist:=false
 ```
 
-上表是经操作者确认的实体机械臂映射。上游的 `can_muti_activate.sh` 包含相同的
+上表是经操作者确认的实体机械臂映射。工作区的 `can_muti_activate.sh` 包含相同的
 四组 USB 端口与接口对应关系，而 `start_two_piper.launch.py` 默认使用两个从臂
-接口：左侧 `can_fr`、右侧 `can_ml`。若当前 Linux 中接口与序列号的对应关系与
+接口：左侧 `can_fl`、右侧 `can_fr`。若当前 Linux 中接口与序列号的对应关系与
 此不符，请先修复持久化的链路命名再进入控制阶段；不要仅凭接口名去选择机械臂。
 
 ## 只读映射确认
@@ -125,10 +106,10 @@ ros2 run piper piper_bus_probe --port can_fl --duration 2
 
 | 接口 | 角色 | 不同 ID 数 | 布局 | j1 角度 | 母线电压 |
 | --- | --- | --- | --- | --- | --- |
-| `can_fl` | `master_left` | 25 | 常规 | −6.993° | 23.0 V |
+| `can_ml` | `master_left` | 25 | 常规 | −6.993° | 23.0 V |
 | `can_mr` | `master_right` | 25 | 常规 | −6.637° | 23.0 V |
-| `can_fr` | `follower_left` | 20 | 常规 | −4.778° | 23–24 V |
-| `can_ml` | `follower_right` | 20 | 常规 | −2.921° | 23–24 V |
+| `can_fl` | `follower_left` | 20 | 常规 | −4.778° | 23–24 V |
+| `can_fr` | `follower_right` | 20 | 常规 | −2.921° | 23–24 V |
 
 **结论：映射关系正确。** 四条接口各有完整的 Piper 反馈帧、帧率正常、供电正常、
 角度合理，无 ID 冲突。
@@ -214,5 +195,3 @@ ros2 run piper piper_joint_watch --arm can_fl --arm can_mr
   读数被别的指令干扰。
 - 角度原始分辨率为 `0.001` 度，显示到小数点后三位。判定「被移动过」的默认阈值
   是 `5.0` 度，可用 `--moved-threshold` 调整。
-
-

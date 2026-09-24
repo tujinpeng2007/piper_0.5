@@ -73,7 +73,7 @@ SIDES = {
     'left': ('/joint_ctrl_cmd_left', '/joint_states_left',
              '/arm_enable_status_left', 'follower_left (can_fl)'),
     'right': ('/joint_ctrl_cmd_right', '/joint_states_right',
-              '/arm_enable_status_right', 'follower_right (can_ml)'),
+              '/arm_enable_status_right', 'follower_right (can_fr)'),
 }
 ENABLE_SERVICES = {'left': '/enable_srv_left', 'right': '/enable_srv_right'}
 DEFAULT_MASTER_TOPIC = '/joint_states_single'
