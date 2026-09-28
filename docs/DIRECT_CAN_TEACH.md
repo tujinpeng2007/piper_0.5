@@ -113,5 +113,8 @@ ros2 run piper piper_direct_role_config \
 
 ## 相机现状
 
-USB 已识别 Intel RealSense D455（`8086:0b5c`）和 Orbbec Gemini 305（`2bc5:0840`）。
-第三视角的 ROS 驱动、话题、标定和数据录制尚未接入；应与机械臂直连验证分开进行。
+三台相机已经接入并完成 ROS 话题与约 `30 Hz` 帧率验证：左夹爪
+`CV27561000MR`、右夹爪 `CV275610002H`、第三视角 D455
+`338122301303`。统一启动命令见
+[`三相机接入手册`](CAMERA_SETUP.md) 和
+[`Piper Pi05 操作与指令记录`](PIPER_PI05_OPERATION_RECORD.md)。

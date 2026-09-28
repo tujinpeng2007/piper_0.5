@@ -29,6 +29,9 @@ git checkout humble
 |---|---|
 |Moveit|[Moveit README](src/piper_moveit/README.md)|
 |仿真|[仿真 README](src/piper_sim/README.md)|
+|当前 Pi05 操作与指令记录|[Piper Pi05 操作与指令记录](docs/PIPER_PI05_OPERATION_RECORD.md)|
+|同总线直连主从|[直连主从操作手册](docs/DIRECT_CAN_TEACH.md)|
+|三相机接入|[三相机接入手册](docs/CAMERA_SETUP.md)|
 
 ## 0 注意URDF版本
 
