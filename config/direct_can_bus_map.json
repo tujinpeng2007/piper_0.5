@@ -1,0 +1,20 @@
+{
+  "left_pair": {
+    "interface": "can_left",
+    "usb_port": "1-13:1.0",
+    "bitrate": 1000000,
+    "mode": "firmware_master_slave_same_bus",
+    "master_role_config": "0xFA",
+    "follower_role_config": "0xFC",
+    "verified_by": "physical_follow_test"
+  },
+  "right_pair": {
+    "interface": "can_right",
+    "usb_port": "1-4:1.0",
+    "bitrate": 1000000,
+    "mode": "firmware_master_slave_same_bus",
+    "master_role_config": "0xFA",
+    "follower_role_config": "0xFC",
+    "verified_by": "physical_follow_test"
+  }
+}

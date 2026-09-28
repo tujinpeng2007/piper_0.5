@@ -1,15 +1,10 @@
 #!/bin/bash
-declare -A USB_PORTS 
+declare -A USB_PORTS
 
-# 当前实验机四路 USB-CAN 端口与接口名的固定映射。
-# 左主臂
-USB_PORTS["1-11:1.0"]="can_ml:1000000"
-# 左从臂
-USB_PORTS["1-13:1.0"]="can_fl:1000000"
-# 右主臂
-USB_PORTS["1-4:1.0"]="can_mr:1000000"
-# 右从臂
-USB_PORTS["1-2:1.0"]="can_fr:1000000"
+# 当前实验机只有两路 USB-CAN。每路总线各自连接同侧的一台主臂和一台从臂；
+# 主从角色由 Piper 固件保存，本脚本只负责接口命名和 1 Mbps 链路激活。
+USB_PORTS["1-13:1.0"]="can_left:1000000"
+USB_PORTS["1-4:1.0"]="can_right:1000000"
 
 # Whether to ignore CAN quantity check (default false)
 IGNORE_CHECK=false

@@ -37,6 +37,8 @@ setup(
             'piper_teleop = piper.piper_teleop:main',
             'piper_speed_limit = piper.piper_speed_limit:main',
             'piper_teleop_verify = piper.piper_teleop_verify:main',
+            'piper_direct_link_watch = piper.piper_direct_link_watch:main',
+            'piper_direct_role_config = piper.piper_direct_role_config:main',
         ],
     },
 )

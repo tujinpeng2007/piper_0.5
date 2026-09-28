@@ -37,9 +37,9 @@ CORE_FEEDBACK_CAN_IDS = (
     + tuple(JOINT_ANGLE_IDS)
     + (GRIPPER_FEEDBACK_CAN_ID,)
 )
-# Making an arm the teaching input arm shifts its feedback IDs by one of these
-# amounts (CAN 0x470); see MasterSlaveConfig in the SDK.  An arm that never
-# received that command stays a motion output arm and keeps the plain IDs.
+# A teaching-input arm can shift its feedback IDs by one of these amounts via
+# CAN 0x470.  The offset is optional: the official 0xFA example uses 0x00, so
+# plain 0x2Ax feedback alone does not identify the arm role.
 TEACHING_INPUT_OFFSETS = (0x10, 0x20)
 _ANGLE_SCALE = 0.001  # raw joint angles are 0.001 degree per count
 
