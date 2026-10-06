@@ -1,10 +1,36 @@
 # Piper Pi05 操作与指令记录
 
-> 当前实验机的复工和交接摘要。当前有效架构是 Piper 固件同总线直连主从示教；旧的
-> ROS `piper_teleop` 只属于历史实验，不要和当前直连模式混用。
+> 当前实验机的复工和交接摘要。当前已验证左侧上位机示教模式；右侧暂不推进。旧的
+> ROS `piper_teleop` 和固件同总线直连模式均属于历史方案，不能与当前上位机示教桥混用。
+
+## 当前上位机示教状态（2026-10-06）
+
+- 左主臂已进入物理示教模式，示教反馈为 `0x2C5`~`0x2C7`。
+- 左从臂在 `can_left` 上已确认六关节全部使能。
+- 工作区新增 `piper_teach_reader` 和 `piper_teach_follow`；后者默认干跑，只有加入
+  `--send` 才发送 `0x151`、`0x155`~`0x157`。
+- 左侧已实际完成“4 秒五次最小 jerk 对齐 + 主臂绝对跟随”。
+- 右侧上位机示教尚未开始；明天继续时先复验左侧，不要直接启动右侧。
+
+左侧复验命令：
+
+```bash
+cd ~/piper_tjp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run piper piper_teach_follow \
+  --can-port can_left \
+  --topic /joint_states_teach_shared \
+  --send \
+  --align-seconds 4
+```
+
+启动后前 4 秒不要触碰左主臂。停止节点不会自动失能；离开前先确认节点停止，再按现场流程
+安全关闭机械臂。共享 CAN 上的 `0x471` 是广播帧，不能把旧的单臂 ROS 服务命令直接套用到当前架构。
 
 ## 一、当前状态
 
+- 当前主线：左侧上位机示教桥，右侧暂缓。
 - 系统：Ubuntu 22.04、ROS 2 Humble。
 - 工作区：`~/piper_tjp`，分支：`humble`。
 - GitHub：`tujinpeng2007/piper_0.5`。
@@ -44,7 +70,7 @@ for c in can_left can_right; do echo "===== $c ====="; ip -details link show "$c
 
 预期包含 `state UP`、`can state ERROR-ACTIVE`、`bitrate 1000000`。
 
-## 四、直连主从模式
+## 四、历史：固件直连主从模式
 
 同侧两台 Piper 接在同一条 CAN 总线上，由固件直接完成跟随：主臂角色为 `0xFA`，
 从臂角色为 `0xFC`，角色配置 CAN ID 为 `0x470`。主臂运行时发送 `0x151`、
@@ -88,7 +114,7 @@ ros2 run piper piper_direct_role_config --can-port can_left --role follower --ap
 两台臂都会收到广播，当前没有验证过的单臂目标地址机制，不能盲发。`0x470` 是角色配置，不是
 失能命令，不要为了失能重复发送 `0xFA` 或 `0xFC`。[官方接口说明](https://github.com/agilexrobotics/piper_sdk/blob/master/asserts/V2/INTERFACE_V2.MD)
 
-## 七、只读检查直连联动
+## 七、历史：只读检查固件直连联动
 
 ```bash
 cd ~/piper_tjp; source /opt/ros/humble/setup.bash; source install/setup.bash
@@ -138,7 +164,8 @@ git push origin humble
 
 ## 十、已验证里程碑
 
-- [x] 左右两条共享 CAN 总线、主从角色和实际跟随。
-- [x] 左右两侧检测到官方直连控制帧。
+- [x] 左侧上位机示教读取、4 秒五次插值对齐和实际跟随。
+- [x] 左右两条共享 CAN 总线及历史固件直连角色已记录。
+- [ ] 右侧上位机示教尚未推进。
 - [x] D455、左 Gemini 305、右 Gemini 305 均约 `30 Hz`。
 - [x] 三相机一键启动并发布预期话题。

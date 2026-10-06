@@ -1,67 +1,71 @@
 # 项目交接与复工手册
 
-> **架构更新（2026-09-28）：** 本文的四接口映射、ROS 双节点和 `piper_teleop` 步骤记录
-> 的是上一阶段主机桥接实验，不可用于当前硬件。当前入口为
-> [同总线直连主从操作手册](DIRECT_CAN_TEACH.md)。
+> **架构更新（2026-10-06）：** 当前正在使用左侧“上位机示教模式”：左主臂进入物理示教模式，
+> 工作区读取主臂 `0x2C*` 反馈，并由 `piper_teach_follow` 向左从臂发送标准运动帧。
+> 左侧已完成真机跟随验证；右侧上位机示教尚未推进。固件同总线直连模式和旧 `piper_teleop`
+> 均属于历史方案，暂不混用。
 
 > **用途：** 本文是工作区 `~/piper_tjp` 的复工入口。恢复项目时先读本文，再读 [CAN 映射](PI05_CAN_MAPPING.md) 和[遥操作操作手册](PIPER_TELEOP.md)。本文记录的是 2026-09-24 在本实验机上实际验证的状态。
 
+## 当前阶段（2026-10-06）
+
+- 左侧上位机示教链路已打通并完成真机跟随：
+  `左主臂物理示教模式 -> can_left 的 0x2C5~0x2C7 -> piper_teach_follow -> 0x151/0x155~0x157 -> 左从臂`。
+- 左从臂曾出现 j1、j6 未使能；已明确授权发送一次 `0x471` 全臂使能广播帧，随后六个关节均为 `enabled=True`。
+- `piper_teach_follow --send --align-seconds 4` 已完成 4 秒五次最小 jerk 对齐并实际跟随。
+- 跟随节点停止后不会自动失能；本次离开前必须先确认节点已停止，再按现场流程安全收尾。
+- 右侧暂不推进，明天从左侧复验和代码提交开始。
+
+当前上位机示教命令：
+
+```bash
+cd ~/piper_tjp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run piper piper_teach_follow \
+  --can-port can_left \
+  --topic /joint_states_teach_shared \
+  --send \
+  --align-seconds 4
+```
+
+启动后前 4 秒不要触碰左主臂；看到“进入主臂绝对跟随”后再小幅拖动。未确认安全前不要加
+`--send`，不要启动旧 `piper_single_ctrl` 或 `piper_teleop`。
+
 ## 一分钟回忆：项目到了哪里
 
-项目运行在 ROS 2 Humble，当前使用自己的 fork 的 `humble` 分支。四台 Piper 的主从遥操作已完成实际验证：左、右两组均能跟随，并在会话结束后自动回到 follower 的启动姿态。
+项目运行在 ROS 2 Humble，当前使用自己的 fork 的 `humble` 分支。当前阶段只推进左侧上位机示教：左主臂进入物理示教模式，工作区读取示教反馈，再控制左从臂。右侧暂缓。
 
-已验证的默认组合：
+左侧已验证的流程是：先确认左从臂六关节全部使能，再启动 `piper_teach_follow --send`；节点启动后前 4 秒为五次最小 jerk 对齐，必须不碰主臂，看到“进入主臂绝对跟随”后再小幅拖动。
 
-| 项目 | 当前值 |
-| --- | --- |
-| 对齐、回位曲线 | 五次最小 jerk |
-| 控制频率 | 50 Hz |
-| 滤波 | 一阶低通，`tau=0.02 s` |
-| 死区 | `0.4 deg` |
-| 死区速度门限 | `1.0 deg/s` |
-| 平滑级带宽 | `15 rad/s` |
-| 通常遥操时长 | `30 s` |
+旧的四路 ROS 主从节点、`piper_teleop` 和固件同总线直连，均保留作历史记录，不要与当前上位机示教流程混用。
 
-这套组合在左臂真机上表现为静止基本不抖、小幅操作延迟基本不可感知；右臂也已完成“跟随 → 自动回位”验证。
+## 当前有效的硬件映射
 
-**操作纪律：** 前 4 秒是对齐阶段，必须不碰 master。等终端打印“进入绝对跟随”后，先小幅、低速拖动。对齐中移动 master 会触发重新对齐，表现得像“没有跟上”，不是通信故障。
+| 组别 | 主从关系 | 共用 SocketCAN 接口 | USB 端口 |
+| --- | --- | --- | --- |
+| 左侧 | 左主臂 + 左从臂 | `can_left` | `1-13:1.0` |
+| 右侧 | 右主臂 + 右从臂 | `can_right` | `1-4:1.0` |
 
-## 当前唯一有效的硬件映射
-
-| 物理角色 | SocketCAN 接口 | USB 端口 |
-| --- | --- | --- |
-| 左主臂 | `can_ml` | `1-11:1.0` |
-| 左从臂 | `can_fl` | `1-13:1.0` |
-| 右主臂 | `can_mr` | `1-4:1.0` |
-| 右从臂 | `can_fr` | `1-2:1.0` |
-
-这个关系已通过逐臂拖动与关节角度监视确认。权威配置是 `config/pi05_can_map.json`；`can_muti_activate.sh`、双从臂 launch 默认值与遥操显示也已同步。
-
-**不要**按 `can0`、`can1` 等 Linux 枚举顺序推断角色。电脑重启、换 USB 插口或重新插拔适配器后，必须先做下面的硬件检查。
+当前每侧两台 Piper 共用一条 CAN 总线。旧的 `can_ml`、`can_fl`、`can_mr`、`can_fr` 四接口表
+只属于历史分开接线阶段，不要用于当前上位机示教。电脑重启或重新插拔适配器后，先运行
+`bash find_all_can_port.sh` 确认 `can_left`、`can_right`。
 
 ## 放假前安全收尾
 
-确保 follower 已回位、没有遥操程序运行后，在任一已 source 的终端执行：
+当前上位机示教节点停止后不会自动失能。离开前按以下顺序操作：
+
+1. 在跟随节点终端按 `Ctrl-C`，确认程序已经退出；
+2. 确认没有运动控制进程：
 
 ```bash
-ros2 service call /enable_srv_left piper_msgs/srv/Enable "{enable_request: false}"
-ros2 service call /enable_srv_right piper_msgs/srv/Enable "{enable_request: false}"
+ps -ef | grep -E 'piper_(single_ctrl|teleop|teach_follow)' | grep -v grep || echo "没有 Piper 控制进程"
 ```
 
-节点还在运行时，确认两台 follower 都已失能：
+3. 不要在共享 `can_left` 上盲发旧的 `/enable_srv_left`；`0x471` 是共享总线广播帧，当前没有经过验证的单臂失能命令；
+4. 确认机械臂停止、工作区清空、急停可达后，按实验室流程关闭左侧机械臂物理电源，再关闭主机。
 
-```bash
-ros2 topic echo /arm_enable_status_left --once
-ros2 topic echo /arm_enable_status_right --once
-```
-
-两边必须为 `all_enabled: false`、`state: 1`。再依次在所有节点终端按 `Ctrl-C`，包括左主臂、左从臂、右主臂、右从臂节点。**不要**在遥操或自动回位进行时直接关闭终端。
-
-```bash
-ps -ef | grep -E 'piper_(single_ctrl|teleop)' | grep -v grep || echo "没有 Piper 控制进程"
-```
-
-确认机械臂有稳定支撑、工作空间已清空、急停可达后，按实验室批准的流程关闭机械臂电源与主机。节点退出不等价于失能，所以要先失能、确认，再退出节点。
+如遇异常运动，优先使用现场急停。不要在运动过程中拔 CAN 线或关闭终端。
 
 ## 回来后的硬件复工检查
 
@@ -94,134 +98,62 @@ bash find_all_can_port.sh
 ip -br link show | grep -E 'can|slcan'
 ```
 
-预期能看到四路 `can_ml`、`can_fl`、`can_mr`、`can_fr`，状态均为 `UP`。某路存在但为 `DOWN` 时，必须先停掉所有 ROS 控制节点，再重新拉起；例如右主臂：
+预期能看到 `can_left`、`can_right`，状态均为 `UP`。某路存在但为 `DOWN` 时，必须先停掉所有控制节点，再重新拉起；例如 `can_right`：
 
 ```bash
-sudo ip link set can_mr down
-sudo ip link set can_mr type can bitrate 1000000
-sudo ip link set can_mr up
-ip -details link show can_mr | grep -E 'state|can state|bitrate'
+sudo ip link set can_right down
+sudo ip link set can_right type can bitrate 1000000
+sudo ip link set can_right up
+ip -details link show can_right | grep -E 'state|can state|bitrate'
 ```
 
-预期是 `state UP`、`can state ERROR-ACTIVE`、`bitrate 1000000`。若 `can_mr` 完全不存在，优先检查右主臂的 USB `1-4` 连接。它曾发生过一次短暂 USB 错误 `-71`；重插后恢复。接口缺失或反复掉线时，不要开始遥操。
+预期是 `state UP`、`can state ERROR-ACTIVE`、`bitrate 1000000`。若 `can_right` 完全不存在，优先检查右侧 CAN 转接器的 USB 连接。接口缺失或反复掉线时，不要开始遥操。
 
 ## 最快的左臂复验
 
-每个“节点”使用一个独立终端；节点运行期间不要在该终端继续输入命令。
+前提：左主臂进入物理示教模式，左从臂已上电并确认六关节全部使能；右侧暂时断电。
 
-### 终端 1：左主臂节点
-
-```bash
-cd ~/piper_tjp
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 launch piper start_single_piper.launch.py \
-  can_port:=can_ml auto_enable:=false gripper_exist:=false
-```
-
-### 终端 2：左从臂节点
+### 终端 1：左臂上位机示教桥
 
 ```bash
 cd ~/piper_tjp
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 run piper piper_single_ctrl \
-  --ros-args \
-  -r __node:=piper_left_ctrl_node \
-  -p can_port:=can_fl \
-  -p auto_enable:=false \
-  -p gripper_exist:=false \
-  -p gripper_val_mutiple:=1 \
-  -r pos_cmd:=/pos_cmd_left \
-  -r joint_ctrl_single:=/joint_ctrl_cmd_left \
-  -r enable_flag:=/enable_flag_left \
-  -r enable_srv:=/enable_srv_left \
-  -r joint_states_single:=/joint_states_left \
-  -r joint_states_feedback:=/joint_left \
-  -r joint_ctrl:=/joint_states_ctrl_left \
-  -r arm_status:=/arm_status_left \
-  -r arm_enable_status:=/arm_enable_status_left \
-  -r end_pose:=/end_pose_left \
-  -r end_pose_stamped:=/end_pose_stamped_left
+ros2 run piper piper_teach_follow \
+  --can-port can_left \
+  --topic /joint_states_teach_shared \
+  --send \
+  --align-seconds 4
 ```
 
-### 终端 3：使能左从臂并确认
+4 秒对齐期间不要触碰主臂；进入跟随后再小幅拖动。停止时按 `Ctrl-C`。
+
+### 终端 2：左从臂只读使能检查
 
 ```bash
 cd ~/piper_tjp
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-
-ros2 topic echo /arm_enable_status --once
-ros2 topic echo /arm_enable_status_left --once
-ros2 service call /enable_srv_left piper_msgs/srv/Enable "{enable_request: true}"
-ros2 topic echo /arm_enable_status_left --once
+ros2 run piper piper_enable_check --port can_left --duration 3
 ```
 
-确认主臂为 `can_ml` 且 `all_enabled: false`；从臂为 `can_fl`，使能后 `all_enabled: true`。
+该检查只读，不发送 CAN。共享总线上的 `0x471` 是广播帧，未得到明确确认前不要再次发送。
 
-### 终端 4：左臂实际遥操
+## 右臂复验要点（暂缓）
 
-```bash
-cd ~/piper_tjp
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-
-ros2 run piper piper_teleop \
-  --side left \
-  --master-topic /joint_states_single \
-  --duration 30 \
-  --enable
-```
-
-结束、或第一次 `Ctrl-C` 后都会自动回位；回位期间第二次 `Ctrl-C` 才是立即停止。回位完成后立即失能：
-
-```bash
-ros2 service call /enable_srv_left piper_msgs/srv/Enable "{enable_request: false}"
-```
-
-## 右臂复验要点
-
-右臂已验证的节点和话题：
-
-| 角色 | 节点 | 关键话题 / 服务 |
-| --- | --- | --- |
-| 右主臂 | `/piper_master_right_ctrl_node` | `/joint_states_master_right` |
-| 右从臂 | `/piper_right_ctrl_node` | `/joint_ctrl_cmd_right`、`/enable_srv_right` |
-
-实际遥操命令：
-
-```bash
-ros2 run piper piper_teleop \
-  --side right \
-  --master-topic /joint_states_master_right \
-  --duration 30 \
-  --enable
-```
-
-开始前先让右从臂 `can_fr` 使能，右主臂 `can_mr` 保持失能。推荐先去掉 `--enable` 干跑，确认输出是：
-
-```text
-follower 目标话题：/joint_ctrl_cmd_right（follower_right (can_fr)）
-master 角度话题  ：/joint_states_master_right
-```
-
-结束后：
-
-```bash
-ros2 service call /enable_srv_right piper_msgs/srv/Enable "{enable_request: false}"
-```
+右侧上位机示教尚未开始，当前不要启动右侧发送节点，也不要使用旧的右侧 `piper_teleop`。
+明天继续时，先以左侧已验证流程为基准，单独研究右主臂的示教反馈 ID 和从臂使能状态。
 
 ## 快速故障判断
 
 | 现象 | 优先检查 | 不要做什么 |
 | --- | --- | --- |
-| follower 不动 | 对应 `/arm_enable_status_*` 是否为 `all_enabled: true`；遥操命令是否带 `--enable` | 未确认接口就反复换 CAN 名称 |
-| “拒绝：整臂未确认使能” | 只使能对应 follower，再读状态 | 使能 master |
+| follower 不动 | 左从臂六关节是否全部使能；是否等待 4 秒对齐完成 | 启动旧节点或重复发送广播使能帧 |
+| 从臂部分使能 | 运行 `piper_enable_check --port can_left --duration 3` | 直接发送运动帧 |
 | 对齐不断重启 | 等 4 秒对齐完成后再移动 master | 对齐中持续拖动 master |
-| `can_mr` 不存在或 DOWN | 停节点，检查 USB `1-4`，必要时重新拉起链路 | 节点运行时重配 CAN |
+| `can_right` 不存在或 DOWN | 停节点，检查右侧 USB-CAN，必要时重新拉起链路 | 节点运行时重配 CAN |
 | 想确认实体映射 | 全部失能后运行 `ros2 run piper piper_joint_watch`，逐台拖动 | 靠接口名猜左右 |
-| 想紧急停止 | 第一次 `Ctrl-C` 等回位；回位中第二次才立即停 | 回位途中拔线或关终端 |
+| 想紧急停止 | 立即使用现场急停 | 回位途中拔线或关终端 |
 
 ## Git 续接与记录
 
@@ -246,7 +178,9 @@ git push origin humble
 ## 当前里程碑
 
 - [x] 自己的 fork 的 `humble` 已可独立提交。
-- [x] 四臂 CAN 映射已经确认并固定。
-- [x] 左臂遥操已完成防抖、低延迟参数的真机验证。
-- [x] 左、右两组实际遥操均通过，且自动回位正常。
-- [ ] 后续优化应一次只改一个参数，并在相同动作条件下记录抖动、延迟和回位轨迹。
+- [x] 四台 Piper 的共享 CAN 映射已确认：左 `can_left`、右 `can_right`。
+- [x] 三台相机 ROS 话题与约 30 Hz 帧率已验证。
+- [x] 左侧上位机示教读取、4 秒五次插值对齐和真机跟随已验证。
+- [ ] 左侧示教桥代码尚未提交和推送。
+- [ ] 右侧上位机示教尚未推进。
+- [ ] 完善共享 CAN 下单臂失能流程。
