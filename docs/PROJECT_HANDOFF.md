@@ -5,7 +5,7 @@
 > 左侧已完成真机跟随验证；右侧上位机示教尚未推进。固件同总线直连模式和旧 `piper_teleop`
 > 均属于历史方案，暂不混用。
 
-> **用途：** 本文是工作区 `~/piper_tjp` 的复工入口。恢复项目时先读本文，再读 [CAN 映射](PI05_CAN_MAPPING.md) 和[遥操作操作手册](PIPER_TELEOP.md)。本文记录的是 2026-09-24 在本实验机上实际验证的状态。
+> **用途：** 本文是工作区 `~/piper_tjp` 的复工入口。恢复项目时先读本文，再读[操作与指令总表](PIPER_PI05_COMMAND_REFERENCE.md)、[CAN 映射](PI05_CAN_MAPPING.md)和[遥操作操作手册](PIPER_TELEOP.md)。本文记录的是本实验机上实际验证的状态。
 
 ## 当前阶段（2026-10-06）
 
@@ -156,6 +156,9 @@ ros2 run piper piper_enable_check --port can_left --duration 3
 | 想紧急停止 | 立即使用现场急停 | 回位途中拔线或关终端 |
 
 ## Git 续接与记录
+
+完整的终端命名、状态检查、全臂使能/失能、上位机示教、相机和文档更新规则见
+[Piper Pi05 指令与操作总表](PIPER_PI05_COMMAND_REFERENCE.md)。
 
 每次实验开始和结束都执行：
 

@@ -105,6 +105,8 @@ class PiperTeachFollow(Node):
         self._reported_following = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._can_fault = threading.Event()
+        self._can_fault_reason: Optional[str] = None
         self._bus = bus_factory(
             channel=can_port, interface='socketcan', receive_own_messages=False)
         receive_ids = [can_id + feedback_offset for can_id in JOINT_FRAME_IDS]
@@ -130,7 +132,11 @@ class PiperTeachFollow(Node):
 
     def _read_loop(self) -> None:
         while not self._stop.is_set():
-            message = self._bus.recv(timeout=0.2)
+            try:
+                message = self._bus.recv(timeout=0.2)
+            except (can.CanError, OSError) as exc:
+                self._record_can_fault(exc)
+                return
             if message is None or message.is_error_frame:
                 continue
             master = decode_joint_frame(
@@ -143,6 +149,15 @@ class PiperTeachFollow(Node):
                 if follower:
                     self._follower_angles.update(follower)
 
+    def _record_can_fault(self, exc: Exception) -> None:
+        """Latch a CAN fault and fail closed instead of sending further motion."""
+        if self._can_fault.is_set():
+            return
+        self._can_fault_reason = str(exc)
+        self._can_fault.set()
+        self.get_logger().error(
+            f'CAN 通信故障，已停止发送运动帧：{self._can_fault_reason}')
+
     def _snapshots(self) -> tuple[Optional[list[float]], Optional[list[float]]]:
         with self._lock:
             master = None
@@ -154,23 +169,30 @@ class PiperTeachFollow(Node):
             return master, follower
 
     def _send_targets(self, positions: list[float]) -> None:
-        self._bus.send(can.Message(
-            arbitration_id=MOTION_CTRL_ID,
-            data=MOTION_CTRL_DATA,
-            is_extended_id=False,
-        ))
-        for can_id, first, second in (
-            (JOINT_CTRL_IDS[0], 0, 1),
-            (JOINT_CTRL_IDS[1], 2, 3),
-            (JOINT_CTRL_IDS[2], 4, 5),
-        ):
+        if self._can_fault.is_set():
+            return
+        try:
             self._bus.send(can.Message(
-                arbitration_id=can_id,
-                data=encode_joint_frame(positions[first], positions[second]),
+                arbitration_id=MOTION_CTRL_ID,
+                data=MOTION_CTRL_DATA,
                 is_extended_id=False,
             ))
+            for can_id, first, second in (
+                (JOINT_CTRL_IDS[0], 0, 1),
+                (JOINT_CTRL_IDS[1], 2, 3),
+                (JOINT_CTRL_IDS[2], 4, 5),
+            ):
+                self._bus.send(can.Message(
+                    arbitration_id=can_id,
+                    data=encode_joint_frame(positions[first], positions[second]),
+                    is_extended_id=False,
+                ))
+        except (can.CanError, OSError) as exc:
+            self._record_can_fault(exc)
 
     def _tick(self) -> None:
+        if self._can_fault.is_set():
+            return
         master, follower = self._snapshots()
         if master is None:
             return
