@@ -20,6 +20,10 @@
 - 左夹爪相机通过 USB2.1 连接，固定使用 `640x480`；
 - D455 的彩色图像为 `1280x720`，深度图像为 `848x480`。
 
+2026-10-07 已再次完成三台相机一键并行运行验证，六路彩色/深度图像均约
+`29~30 Hz`。启动文件使用独立 launch 参数作用域，避免 Orbbec 的同名参数污染
+RealSense；同时按“左 Orbbec、右 Orbbec、D455”依次错峰启动，避免 USB 设备枚举竞争。
+
 Orbbec 驱动的 USB `udev` 权限规则已安装到系统，位置为
 `/etc/udev/rules.d/99-obsensor-libusb.rules`。
 
@@ -41,6 +45,18 @@ cd ~/piper_tjp
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch piper start_cameras.launch.py
+```
+
+启动时间顺序：左夹爪相机 `T+0s`、右夹爪相机 `T+5s`、第三视角 D455 `T+10s`。
+启动后至少等待 18 秒再检查话题。正常应出现以下六路图像：
+
+```text
+/camera_gripper_left/color/image_raw
+/camera_gripper_left/depth/image_raw
+/camera_gripper_right/color/image_raw
+/camera_gripper_right/depth/image_raw
+/camera_third_view/D455_1/color/image_raw
+/camera_third_view/D455_1/depth/image_rect_raw
 ```
 
 另开终端检查：

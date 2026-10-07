@@ -41,6 +41,8 @@ setup(
             'piper_direct_role_config = piper.piper_direct_role_config:main',
             'piper_teach_reader = piper.piper_teach_reader:main',
             'piper_teach_follow = piper.piper_teach_follow:main',
+            'piper_dataset_streams = piper.piper_dataset_streams:main',
+            'piper_episode_marker = piper.piper_episode_marker:main',
         ],
     },
 )

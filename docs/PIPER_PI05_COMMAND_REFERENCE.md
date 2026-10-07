@@ -31,10 +31,11 @@
 | --- | --- | --- |
 | 01-复工与状态 | 同步、编译、检查进程和 CAN | 默认不发送 |
 | 02-只读检查 | 检查使能状态、话题和帧率 | 不发送 |
-| 03-全臂控制 | 发送全总线使能/失能命令 | 会改变硬件状态 |
+| 03-全臂控制 | 保留名称；共享 CAN 的软件使能/失能操作当前暂停 | 不执行任何 CAN 广播命令 |
 | 04-左示教桥 | 左侧上位机示教 | 加 --send 后会发送运动帧 |
 | 05-右示教桥 | 右侧上位机示教，尚未完成验证 | 加 --send 后会发送运动帧 |
 | 06-相机 | 启动三台相机 | 不控制机械臂 |
+| 07-训练数据流 | 相机降频、彩色 JPEG 与深度转发 | 不访问 CAN，不控制机械臂 |
 
 每个 ROS 终端开始前执行：
 
@@ -165,7 +166,7 @@
 
     ros2 run piper piper_teach_follow \
       --can-port can_left \
-      --topic /joint_states_teach_left \
+      --topic /joint_states_teach_shared \
       --align-seconds 4
 
 确认能读到主臂反馈后，按 Ctrl-C 停止。
@@ -174,7 +175,7 @@
 
     ros2 run piper piper_teach_follow \
       --can-port can_left \
-      --topic /joint_states_teach_left \
+      --topic /joint_states_teach_shared \
       --send \
       --align-seconds 4
 
@@ -218,6 +219,10 @@ UP 后，先在终端 05-右示教桥做干跑：
     test -f /etc/udev/rules.d/99-obsensor-libusb.rules && echo "Orbbec udev 规则已存在"
     ros2 launch piper start_cameras.launch.py
 
+一键启动会按左 Orbbec `T+0s`、右 Orbbec `T+5s`、D455 `T+10s` 的顺序错峰启动。
+至少等待 18 秒再检查话题。三个官方 launch 使用独立参数作用域，不能移除该隔离，否则
+Orbbec 的 `device_type` 等参数会污染 RealSense，导致 D455 无法匹配设备。
+
 检查话题：
 
     ros2 topic list | grep -E 'camera_third_view|camera_gripper_left|camera_gripper_right'
@@ -228,7 +233,19 @@ UP 后，先在终端 05-右示教桥做干跑：
     ros2 topic hz /camera_gripper_right/color/image_raw
     ros2 topic hz /camera_third_view/D455_1/color/image_raw
 
-预期约 30 Hz。停止相机时在终端 06-相机按 Ctrl-C；相机节点不控制机械臂。
+2026-10-07 已在三台相机同时运行时验证六路彩色/深度图像均约 `29~30 Hz`。停止相机时
+在终端 06-相机按 Ctrl-C；相机节点不控制机械臂。
+
+### 终端 07-训练数据流
+
+    ros2 run piper piper_dataset_streams --ros-args -p output_rate:=5.0 -p jpeg_quality:=90
+
+该节点将六路相机流降至约 `5 Hz`；彩色输出为 JPEG，深度保持原始 `Image`。2026-10-07
+已验证六路稳定约 `5 Hz`，`10.51s` 的 zstd 试录为 `35.4 MiB`。它不访问 CAN，也不控制机械臂。
+
+夹爪 `0x159` 跟随是示教桥的独立安全开关，必须同时指定 `--send-gripper` 和
+`--gripper-max-travel-mm`、`--shared-can-gripper-risk-acknowledged` 才可能发送。`0x159` 可能
+影响同一共享 CAN 上两台臂的夹爪，当前尚未真机验证；未得到硬件负责人明确确认前，不得使用。
 
 ## 10. 旧方案：只作历史参考
 
@@ -240,7 +257,8 @@ UP 后，先在终端 05-右示教桥做干跑：
 - 固件 0x470 的 0xFA/0xFC 角色配置
 
 旧 ROS 服务 /enable_srv_left、/enable_srv_right 只有在相应旧 ROS 控制节点运行时才存在。
-当前共享 CAN 上位机示教流程使用 cansend 0x471，不要混用旧服务。
+当前共享 CAN 上位机示教流程不使用 `cansend 0x471`；该直接广播操作因右侧异常已暂停，
+不要混用旧服务或自行发送 CAN 广播帧。
 
 ## 11. 安全收尾和离开实验室
 
@@ -249,10 +267,10 @@ UP 后，先在终端 05-右示教桥做干跑：
 
        ps -ef | grep -E 'piper_(single_ctrl|teleop|teach_follow)' | grep -v grep || echo "没有控制进程"
 
-3. 在终端 03-全臂控制发送两条 FF01 失能帧。
-4. 用 piper_enable_check 检查两条总线均为 DISABLED。
+3. 不要发送 `0x471`、`FF01` 或任何未经重新验证的 CAN 广播帧。
+4. 用 piper_enable_check 只读检查状态；出现 PARTIAL、UNKNOWN 或异常时按现场安全流程处理。
 5. 确认机械臂停止、工作区清空、急停可达。
-6. 按实验室流程关闭物理电源，再关闭电脑。
+6. 若需解除保持力，按实验室流程关闭物理电源，再关闭电脑。
 
 不要在机械臂运动时拔 CAN 线、拔 USB 线或直接关闭终端。异常运动时先按现场急停。
 

@@ -2,10 +2,20 @@ import math
 
 from piper.piper_teach_follow import (
     MOTION_CTRL_DATA,
+    decode_gripper_frame,
+    _parser,
     decode_joint_frame,
+    encode_gripper_frame,
     encode_joint_frame,
     minimum_jerk,
 )
+
+
+def test_default_topics_include_master_and_follower_feedback():
+    args = _parser().parse_args(['--can-port', 'can_left'])
+    assert args.topic == '/joint_states_teach_shared'
+    assert args.follower_topic == '/joint_states_follower_shared'
+    assert not args.shared_can_gripper_risk_acknowledged
 
 
 def test_decode_shifted_master_frame():
@@ -18,6 +28,23 @@ def test_decode_shifted_master_frame():
 
 def test_decode_does_not_accept_follower_frame():
     assert decode_joint_frame(0x2A5, bytes(8)) == {}
+
+
+def test_decode_shifted_gripper_frame_uses_ros_metres():
+    data = (42_500).to_bytes(4, 'big', signed=True) + (1_250).to_bytes(
+        2, 'big', signed=True) + bytes((0xC0, 0x00))
+    assert decode_gripper_frame(0x2C8, data) == (0.0425, 1.25, 0xC0)
+
+
+def test_decode_gripper_rejects_non_gripper_frame():
+    assert decode_gripper_frame(0x2C7, bytes(8)) is None
+
+
+def test_encode_gripper_frame_uses_official_units_and_enable_mode():
+    data = encode_gripper_frame(0.0425, 1.25)
+    assert int.from_bytes(data[:4], 'big', signed=True) == 42_500
+    assert int.from_bytes(data[4:6], 'big') == 1_250
+    assert data[6:] == bytes((0x01, 0x00))
 
 
 def test_encode_round_trip():
