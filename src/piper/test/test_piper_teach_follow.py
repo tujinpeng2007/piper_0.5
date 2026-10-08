@@ -47,6 +47,11 @@ def test_encode_gripper_frame_uses_official_units_and_enable_mode():
     assert data[6:] == bytes((0x01, 0x00))
 
 
+def test_encode_gripper_frame_can_encode_official_disable_clear_error_mode():
+    data = encode_gripper_frame(0.0, 1.0, status_code=0x02)
+    assert data[6:] == bytes((0x02, 0x00))
+
+
 def test_encode_round_trip():
     encoded = encode_joint_frame(0.5, -0.25)
     decoded = decode_joint_frame(0x2C5, encoded)

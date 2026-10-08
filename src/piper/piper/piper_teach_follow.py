@@ -67,14 +67,17 @@ def encode_joint_frame(joint_a: float, joint_b: float) -> bytes:
     return b''.join(value.to_bytes(4, 'big', signed=True) for value in values)
 
 
-def encode_gripper_frame(position_m: float, effort_nm: float) -> bytes:
+def encode_gripper_frame(position_m: float, effort_nm: float,
+                         status_code: int = 0x01) -> bytes:
     """Encode a 0x159 gripper command without changing its zero point."""
+    if status_code not in (0x00, 0x01, 0x02, 0x03):
+        raise ValueError('夹爪 status_code 必须是 0x00、0x01、0x02 或 0x03')
     stroke_raw = int(round(position_m * 1_000_000.0))
     effort_raw = int(round(effort_nm * 1_000.0))
     return (
         stroke_raw.to_bytes(4, 'big', signed=True)
         + effort_raw.to_bytes(2, 'big', signed=False)
-        + bytes((0x01, 0x00))
+        + bytes((status_code, 0x00))
     )
 
 

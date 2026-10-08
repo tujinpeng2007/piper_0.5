@@ -2,9 +2,10 @@
 """Probe one shared-CAN gripper target with a read-only default.
 
 The tool is intentionally narrower than ``piper_teach_follow``: it never
-sends joint targets, never enables an arm, and by default only reads the two
-gripper feedback frames.  A real probe is limited to one 0x159 frame after
-both arms report a position close to the requested target.
+sends joint targets and by default only reads the two gripper feedback frames.
+A real position probe is limited to one 0x159 enable frame after both arms
+report a position close to the requested target.  It also has an explicit,
+separate gripper-disable path that mirrors the official SDK status code 0x02.
 """
 
 from __future__ import annotations
@@ -37,6 +38,16 @@ class GripperFeedback:
     position_mm: float
     effort_nm: float
     status: int
+
+
+def driver_enabled(feedback: GripperFeedback) -> bool:
+    """Return the official feedback bit-6 gripper-driver state."""
+    return bool(feedback.status & 0x40)
+
+
+def feedback_state_label(feedback: GripperFeedback) -> str:
+    """Return a concise human-readable driver state without hiding raw bits."""
+    return '已使能' if driver_enabled(feedback) else '已失能'
 
 
 def validate_probe(target_mm: float, master: GripperFeedback,
@@ -95,14 +106,17 @@ def print_feedback(readings: Dict[str, GripperFeedback]) -> None:
             continue
         print(
             f'  {role}: 位置={feedback.position_mm:.3f} mm，'
-            f'反馈扭矩={feedback.effort_nm:.3f} N·m，状态=0x{feedback.status:02X}')
+            f'反馈扭矩={feedback.effort_nm:.3f} N·m，状态=0x{feedback.status:02X} '
+            f'（夹爪驱动{feedback_state_label(feedback)}）')
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--can-port', required=True, help='共享 SocketCAN 接口，例如 can_left')
-    parser.add_argument('--target-mm', type=float, required=True,
+    parser.add_argument('--target-mm', type=float, default=None,
                         help='绝对目标位置（mm）；必须在实测保守范围内')
+    parser.add_argument('--disable', action='store_true',
+                        help='预演或发送一条官方 0x159 夹爪失能/清错帧；不能与 --target-mm 并用')
     parser.add_argument('--effort-nm', type=float, default=0.1,
                         help='仅实际探测时编码的低扭矩值，默认 0.1 N·m')
     parser.add_argument('--apply', action='store_true',
@@ -129,12 +143,19 @@ def _missing_confirmations(options: argparse.Namespace) -> Iterable[str]:
 def main(argv=None, bus_factory=can.Bus) -> int:
     """Run a dry preflight or a tightly bounded, one-frame probe."""
     options = _parser().parse_args(argv)
+    if options.disable and options.target_mm is not None:
+        print('ERROR: --disable 不能与 --target-mm 同时使用。')
+        return 2
+    if not options.disable and options.target_mm is None:
+        print('ERROR: 位置探测必须提供 --target-mm；夹爪失能则使用 --disable。')
+        return 2
     if not 0.0 < options.effort_nm <= 1.0:
         print('ERROR: effort-nm 必须在 (0, 1] N·m 的低扭矩探测范围内。')
         return 2
 
-    print(f'共享 CAN 夹爪探测：接口={options.can_port}，目标={options.target_mm:.3f} mm')
-    print('本工具不发送关节帧、不使能或失能机械臂，也绝不循环发送。')
+    operation = '夹爪失能/清错' if options.disable else f'目标={options.target_mm:.3f} mm'
+    print(f'共享 CAN 夹爪探测：接口={options.can_port}，{operation}')
+    print('本工具不发送关节帧，也绝不循环发送。位置探测帧会使能夹爪驱动。')
     if not options.apply:
         print('模式：只读预演；不会发送 0x159。')
 
@@ -157,13 +178,16 @@ def main(argv=None, bus_factory=can.Bus) -> int:
             print('RESULT: 缺少主臂或从臂夹爪反馈；拒绝实际探测。')
             return 2
 
-        errors = validate_probe(options.target_mm, readings['master'], readings['follower'])
-        if errors:
-            print('RESULT: 预检不通过：')
-            for error in errors:
-                print(f'  - {error}')
-            return 2
-        print(f'预检通过：两把夹爪到目标的预估位移均不超过 {MAX_PROBE_STEP_MM:g} mm。')
+        if not options.disable:
+            errors = validate_probe(options.target_mm, readings['master'], readings['follower'])
+            if errors:
+                print('RESULT: 预检不通过：')
+                for error in errors:
+                    print(f'  - {error}')
+                return 2
+            print(f'预检通过：两把夹爪到目标的预估位移均不超过 {MAX_PROBE_STEP_MM:g} mm。')
+        else:
+            print('预检通过：将使用官方 status_code=0x02 失能/清错，不发送关节帧。')
         if not options.apply:
             print('RESULT: 干跑完成，未发送任何 CAN 帧。')
             return 0
@@ -178,12 +202,27 @@ def main(argv=None, bus_factory=can.Bus) -> int:
             print('RESULT: 缺少实际探测确认：' + '、'.join(missing))
             return 2
 
+        position_m = 0.0 if options.disable else options.target_mm * 0.001
+        effort_nm = 1.0 if options.disable else options.effort_nm
+        status_code = 0x02 if options.disable else 0x01
         bus.send(can.Message(
             arbitration_id=0x159,
-            data=encode_gripper_frame(options.target_mm * 0.001, options.effort_nm),
+            data=encode_gripper_frame(position_m, effort_nm, status_code),
             is_extended_id=False,
         ))
-        print('已发送一条 0x159 低扭矩夹爪探测帧；请立即观察同侧两把夹爪。')
+        if options.disable:
+            print('已发送一条官方 0x159 夹爪失能/清错帧；请复检两路反馈状态。')
+        else:
+            print('已发送一条 0x159 低扭矩夹爪探测帧（status_code=0x01，使能夹爪驱动）；请立即观察同侧两把夹爪。')
+        post_readings = collect_feedback(bus, timeout=1.0)
+        print('发送后只读夹爪反馈：')
+        print_feedback(post_readings)
+        if options.disable:
+            follower = post_readings.get('follower')
+            if follower is not None and not driver_enabled(follower):
+                print('RESULT: 从臂夹爪反馈为已失能；主臂状态仅记录，不作广播推断。')
+            else:
+                print('RESULT: 未确认从臂夹爪失能；不要重复发送，改用现场安全措施。')
         return 0
     except (can.CanError, OSError) as exc:
         print(f'ERROR: CAN 通信失败：{exc}')
