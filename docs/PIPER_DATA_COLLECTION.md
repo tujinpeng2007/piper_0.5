@@ -68,6 +68,9 @@ ros2 run piper piper_dataset_streams --ros-args \
 3. 三相机与机器人基座的外参标定；
 4. 每个示教回合的开始、成功、失败和结束标记。
 
+任务拆分、场景编号、回合元数据、成功条件和正式真机采集前的安全门见
+[香蕉入盒与叠盒数据集规范](PIPER_BANANA_BOX_DATASET_PLAN.md)。
+
 当前只能进行相机压缩流与短时 rosbag 试录，不能把它称为完整训练数据集。
 
 ## 4. 已准备的关节状态话题
@@ -123,18 +126,36 @@ ros2 run piper piper_teach_follow --can-port can_left --send \
 
 ```bash
 # 开始录制后立即标记回合开始
-ros2 run piper piper_episode_marker start --episode-id banana-box-001
+ros2 run piper piper_episode_marker start \
+  --episode-id banana-a01-001 \
+  --task banana_into_box \
+  --scene-id scene-a01 \
+  --attempt 1 \
+  --operator mips
 
 # 任务完成或失败时标记结果；note 可使用中文
-ros2 run piper piper_episode_marker success --episode-id banana-box-001 --note '香蕉已放入纸盒'
-ros2 run piper piper_episode_marker end --episode-id banana-box-001
+ros2 run piper piper_episode_marker success \
+  --episode-id banana-a01-001 \
+  --task banana_into_box \
+  --scene-id scene-a01 \
+  --attempt 1 \
+  --operator mips \
+  --note '香蕉已放入纸盒'
+ros2 run piper piper_episode_marker end \
+  --episode-id banana-a01-001 \
+  --task banana_into_box \
+  --scene-id scene-a01 \
+  --attempt 1 \
+  --operator mips
 ```
 
 录制命令必须加入 `/dataset/episode_marker`。离线整理时，只保留同时具备 `start`、`success` 和
 `end` 的回合；失败回合不删除原始数据，但单独归档以供分析。
 
 2026-10-07 已验证标签工具可发布并被 ROS 接收：`std_msgs/msg/String` 的 `data` 是包含
-`episode_id`、`label`、`note` 与 `stamp_ns` 的 JSON 文本。
+`schema_version`、`episode_id`、`label`、`note`、`stamp_ns`、`task`、`scene_id`、`attempt`
+与 `operator` 的 JSON 文本。后四项为空或 `0` 时，表示旧回合未填写这些元数据；新正式回合
+必须填写。
 
 首次完整试录时三次标签理论应为 `9` 条，但 rosbag 只录到 `8` 条，原因是第一个标签发布时
 rosbag 仍在发现新话题。标签工具现已改为先等待订阅者（最多 `5s`）再发送三次；若提示

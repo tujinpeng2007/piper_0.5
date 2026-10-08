@@ -14,19 +14,36 @@ from std_msgs.msg import String
 
 VALID_LABELS = ('start', 'end', 'success', 'failure', 'reset', 'note')
 DEFAULT_TOPIC = '/dataset/episode_marker'
+SCHEMA_VERSION = 'piper_pi05_episode_v1'
 
 
-def build_marker(episode_id: str, label: str, note: str, stamp_ns: int) -> str:
+def build_marker(
+    episode_id: str,
+    label: str,
+    note: str,
+    stamp_ns: int,
+    task: str = '',
+    scene_id: str = '',
+    attempt: int = 0,
+    operator: str = '',
+) -> str:
     """Return a portable JSON marker payload for rosbag and offline tooling."""
     if label not in VALID_LABELS:
         raise ValueError(f'未知标签：{label}')
     if not episode_id:
         raise ValueError('episode_id 不能为空')
+    if attempt < 0:
+        raise ValueError('attempt 不能小于 0')
     return json.dumps({
+        'schema_version': SCHEMA_VERSION,
         'episode_id': episode_id,
         'label': label,
         'note': note,
         'stamp_ns': stamp_ns,
+        'task': task,
+        'scene_id': scene_id,
+        'attempt': attempt,
+        'operator': operator,
     }, ensure_ascii=False, separators=(',', ':'))
 
 
@@ -38,6 +55,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument('--episode-id', default=None,
                         help='同一回合使用同一个 ID；省略时自动生成')
     parser.add_argument('--note', default='', help='可选中文备注，例如“香蕉已入盒”')
+    parser.add_argument(
+        '--task', default='',
+        help='任务名，例如 banana_into_box 或 box_stack；同一回合保持一致',
+    )
+    parser.add_argument(
+        '--scene-id', default='',
+        help='场景编号，例如 scene-a03；同一回合保持一致',
+    )
+    parser.add_argument(
+        '--attempt', type=int, default=0,
+        help='同一场景下的尝试编号；0 表示未填写',
+    )
+    parser.add_argument(
+        '--operator', default='',
+        help='操作者代号；不填写则保留为空字符串',
+    )
     parser.add_argument('--topic', default=DEFAULT_TOPIC, help='标签话题')
     return parser
 
@@ -75,7 +108,16 @@ def main(argv=None) -> int:
     node: Optional[EpisodeMarkerPublisher] = None
     try:
         stamp_ns = time.time_ns()
-        payload = build_marker(episode_id, args.label, args.note, stamp_ns)
+        payload = build_marker(
+            episode_id,
+            args.label,
+            args.note,
+            stamp_ns,
+            task=args.task,
+            scene_id=args.scene_id,
+            attempt=args.attempt,
+            operator=args.operator,
+        )
         node = EpisodeMarkerPublisher(args.topic, payload)
         node.publish_reliably()
         node.get_logger().info(f'已发布回合标签：{payload}')
