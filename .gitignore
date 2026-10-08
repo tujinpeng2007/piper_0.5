@@ -17,3 +17,6 @@ oculus_reader
 oculus_reader/oculus_reader
 **/__pycache__/
 .thumbs
+
+# 正式 rosbag 数据：允许存放在工作区 data/，但绝不进入 Git。
+/data/
