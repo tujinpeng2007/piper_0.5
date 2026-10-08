@@ -45,6 +45,7 @@ setup(
             'piper_episode_marker = piper.piper_episode_marker:main',
             'piper_dataset_validate = piper.piper_dataset_validate:main',
             'piper_shared_bus_disable = piper.piper_shared_bus_disable:main',
+            'piper_shared_bus_gripper_probe = piper.piper_shared_bus_gripper_probe:main',
         ],
     },
 )

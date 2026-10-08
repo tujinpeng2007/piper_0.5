@@ -285,6 +285,25 @@ Orbbec 的 `device_type` 等参数会污染 RealSense，导致 D455 无法匹配
 `--gripper-max-travel-mm`、`--shared-can-gripper-risk-acknowledged` 才可能发送。`0x159` 可能
 影响同一共享 CAN 上两台臂的夹爪，当前尚未真机验证；未得到硬件负责人明确确认前，不得使用。
 
+### 终端 10-左夹爪只读预演
+
+首次夹爪验证不得直接使用示教桥的 `--send-gripper`。专用探测工具默认只读取主、从夹爪反馈，
+不会发送 `0x159`、关节帧、使能或失能命令：
+
+```bash
+cd ~/piper_tjp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run piper piper_shared_bus_gripper_probe \
+  --can-port can_left \
+  --target-mm 0.5
+```
+
+2026-10-08 已在 `can_left` 实际干跑：主臂 `-1.4 mm`、从臂 `0.4 mm`，两者到 `0.5 mm`
+目标的预估位移均不超过 `2 mm`；干跑未发送 CAN 帧。只有完成现场空载安全确认后，才可以单独
+讨论是否使用该工具的 `--apply`；不要自行添加该参数。
+
 ## 10. 旧方案：只作历史参考
 
 以下命令不要和当前上位机示教桥同时运行：
