@@ -177,9 +177,31 @@ rosbag 仍在发现新话题。标签工具现已改为先等待订阅者（最�
 当前数据格式已具备正式示教采集所需的传感器、状态和标签结构；尚未完成的硬件前置项仍是右侧
 上位机示教安全恢复，以及共享 CAN 下夹爪控制影响范围确认。
 
+## 8. 离线回合完整性检查
+
+`piper_dataset_validate` 只读取已经结束的 rosbag，不发布 ROS 消息、不访问 CAN，也不控制机械臂。
+它检查话题是否齐全、标签是否属于同一回合、元数据是否一致、每类可靠标签是否至少有三条副本。
+
+静态 A1 预录使用 `static` 模式：要求六路相机和 `start`、`note`、`end` 标签，不要求关节状态：
+
+```bash
+ros2 run piper piper_dataset_validate \
+  ~/piper_tjp/data/2026-10-08/banana_into_box/scene-a01/banana-a01-001 \
+  --mode static \
+  --write-manifest
+```
+
+将来真实示教使用 `demonstration` 模式：除六路相机和标签外，必须具备主臂和从臂两路关节状态，
+且必须有 `success` 或 `failure` 标签。只有输出 JSON 中 `"valid": true` 的回合才可进入对应数据集。
+
 ### 2026-10-08 静态场景预录
 
 已将香蕉模型与空纸盒置于 `scene-a01`，录制 `banana-a01-001`，全程四台臂失能且未启动示教桥。
 rosbag 位于 `data/2026-10-08/banana_into_box/scene-a01/banana-a01-001/`，时长 `77.33s`、大小
 `258.7 MiB`；六路相机各 `380~387` 帧，回合标签 `9` 条。该包验证了正式数据目录、相机流、
 任务元数据与标签回放，属于静态场景基线，不是动作训练数据。
+
+已使用 `piper_dataset_validate --mode static --write-manifest` 实际读取该压缩 rosbag，结果为
+`"valid": true`：六路相机话题齐全，`start`、`note`、`end` 各有 3 条可靠副本，且
+`task=banana_into_box`、`scene_id=scene-a01`、`attempt=1`、`operator=mips` 一致。
+回合目录中的 `episode_manifest.json` 是该次只读检查生成的清单；`data/` 已被 Git 忽略。
