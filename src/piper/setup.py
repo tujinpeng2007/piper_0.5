@@ -43,6 +43,7 @@ setup(
             'piper_teach_follow = piper.piper_teach_follow:main',
             'piper_dataset_streams = piper.piper_dataset_streams:main',
             'piper_episode_marker = piper.piper_episode_marker:main',
+            'piper_shared_bus_disable = piper.piper_shared_bus_disable:main',
         ],
     },
 )

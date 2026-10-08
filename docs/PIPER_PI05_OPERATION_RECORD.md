@@ -24,6 +24,8 @@
   字段；夹爪跟随编码已实现为多重显式开关，但共享 CAN 影响范围尚未确认，禁止真机发送。
 - 完整只读数据包已验证：六路训练相机、两路主从关节/夹爪反馈及回合标签可共同录制；标签工具
   修复订阅发现竞争后，`start`/`success`/`end` 复测达到 `9/9` 条。
+- 2026-10-08：新增 `piper_shared_bus_disable`，复用原版 SDK 的失能调用顺序；已完成单元测试、
+  编译和无发送预演，未执行真机 `--apply`。复工只读检查确认左右两条总线均为六关节 `DISABLED`。
 
 左侧复验命令：
 
@@ -118,14 +120,16 @@ ros2 run piper piper_direct_role_config --can-port can_left --role follower --ap
 旧 ROS 控制节点模式才有 `/enable_srv_left`、`/enable_srv_right`。当前直连模式不启动
 这些 ROS 节点，因此 ROS `enable_srv` 不是直连模式的失能方法。
 
-当前工作区没有经过验证的“共享 CAN 上只失能其中一台臂”命令。安全收尾：松开主臂、确认停止，
-按实验室流程关闭机械臂物理电源；有危险时优先使用现场急停。
+当前工作区没有经过验证的“共享 CAN 上只失能其中一台臂”命令。官方 SDK 有 `DisableArm()`，
+原版 `piper_single_ctrl` 的失能服务会调用它。当前工作区将这个官方调用封装为
+`piper_shared_bus_disable`：默认预演，实际执行需要显式确认机械臂有支撑和理解共享总线广播范围，
+每侧只执行一次并自动只读复检。该工具目前只完成代码、单元测试和无发送预演；尚待硬件负责人
+确认当前共享 CAN 接线下的真机行为。
 
-所以不是理论上只能断电，但在当前共享 CAN 硬件下，物理断电或急停是最明确、最安全的办法。
-
-官方 SDK 有 `DisableArm()`，对应 CAN ID `0x471`，可发送全关节失能命令；但共享 CAN 上主从
-两台臂都会收到广播，当前没有验证过的单臂目标地址机制，不能盲发。`0x470` 是角色配置，不是
-失能命令，不要为了失能重复发送 `0xFA` 或 `0xFC`。[官方接口说明](https://github.com/agilexrobotics/piper_sdk/blob/master/asserts/V2/INTERFACE_V2.MD)
+因此，不是理论上只能断电；在工具经硬件负责人确认并完成真机验证后，可用它让同侧两台臂软件
+失能。此前，物理断电或急停仍是唯一已验证的收尾方式。直接 `cansend 0x471`、循环发送或试图
+用它单独控制同侧一台臂仍然禁止。`0x470` 是角色配置，不是失能命令，不要为了失能重复发送
+`0xFA` 或 `0xFC`。[官方接口说明](https://github.com/agilexrobotics/piper_sdk/blob/master/asserts/V2/INTERFACE_V2.MD)
 
 ## 七、历史：只读检查固件直连联动
 
