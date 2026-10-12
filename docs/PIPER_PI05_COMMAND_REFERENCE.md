@@ -36,6 +36,8 @@
 | 05-右示教桥 | 右侧上位机示教，尚未完成验证 | 加 --send 后会发送运动帧 |
 | 06-相机 | 启动三台相机 | 不控制机械臂 |
 | 07-训练数据流 | 相机降频、彩色 JPEG 与深度转发 | 不访问 CAN，不控制机械臂 |
+| 08-静态录包 | 录制六路图像与回合标签 | 不访问 CAN，不控制机械臂 |
+| 09-离线标注 | 在 P920 桌面使用 LabelMe 标注导出图像 | 不访问 CAN，不控制机械臂 |
 
 每个 ROS 终端开始前执行：
 
@@ -281,9 +283,22 @@ Orbbec 的 `device_type` 等参数会污染 RealSense，导致 D455 无法匹配
 该节点将六路相机流降至约 `5 Hz`；彩色输出为 JPEG，深度保持原始 `Image`。2026-10-07
 已验证六路稳定约 `5 Hz`，`10.51s` 的 zstd 试录为 `35.4 MiB`。它不访问 CAN，也不控制机械臂。
 
+### 终端 08-静态录包与终端 09-离线标注
+
+2026-10-12 已使用 `2 Hz` 图像流补录空盒 `scene-a02` 与盒外香蕉 `scene-a03`，两包
+均经 `piper_dataset_validate --mode static` 验证为 `valid=true`。录包需包含六路
+`/dataset/camera_*` 图像和 `/dataset/episode_marker`；同一回合发布 `start`、`note`、`end`
+标签。完整命令和目录见[示教数据采集手册](PIPER_DATA_COLLECTION.md)。
+
+系统 apt 的 LabelMe `4.6.0` 在本机打开图像时崩溃；桌面标注使用独立环境中的
+`~/labelme-venv/bin/labelme` `6.3.1`，参数为 `--labels banana,box --validate-label exact`。
+`--output` 必须指向当前场景的 `labelme_json/`，保存后检查 JSON 的类别与 `imagePath`。
+当前仅 4 张人工标注图，尚未汇总为训练集；`annotations_coco.json` 仍是空骨架。
+
 夹爪 `0x159` 跟随是示教桥的独立安全开关，必须同时指定 `--send-gripper` 和
 `--gripper-max-travel-mm`、`--shared-can-gripper-risk-acknowledged` 才可能发送。`0x159` 可能
-影响同一共享 CAN 上两台臂的夹爪，当前尚未真机验证；未得到硬件负责人明确确认前，不得使用。
+影响同一共享 CAN 上两台臂的夹爪；单帧夹爪探测已做过真机试验，但双夹爪安全跟随尚未验证；
+未得到硬件负责人明确确认前，不得启用夹爪跟随。
 
 ### 终端 10-左夹爪只读预演
 

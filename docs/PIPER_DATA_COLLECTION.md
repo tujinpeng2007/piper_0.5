@@ -103,8 +103,27 @@ export_manifest.json       # 图像与源 rosbag 的对应关系
 
 只在图像中清晰可见时标注香蕉与纸盒。标注应覆盖完整目标；纸盒采用外框，后续若需要精确放置点再
 补充盒口区域或实例分割标注。当前先完成离线识别基线，不把未标注图片或静态预录误称为训练完成。
-现有 `banana-a01-001` 抽查时香蕉已在盒内，只用于识别与标注流程验证；后续必须补采香蕉在盒外、
-空盒以及不同摆放与光照下的静态场景。
+`banana-a01-001` 抽查时香蕉已在盒内，只用于识别与标注流程验证；现已补采香蕉在盒外、
+空盒两类静态场景，后续仍需增加不同摆放与光照。
+
+2026-10-12 已补录空盒 `banana-a02-001` 和盒外香蕉 `banana-a03-001`，两包均通过
+`piper_dataset_validate --mode static`。各导出 6 张第三视角图像，分别人工标注 1 张；
+原盒内场景人工标注 2 张。人工结果保存在每个导出目录的 `labelme_json/`，不在空的
+`annotations_coco.json` 骨架中。空盒图只标 `box`，盒外图同时标 `banana` 与 `box`；
+两类均使用可见外轮廓，后续如需定位盒口则另设区域定义。
+
+本机 Ubuntu apt 提供的 LabelMe `4.6.0` 在打开图片时因 Qt `QPoint(float, float)`
+类型错误崩溃。已在独立 `~/labelme-venv` 环境安装 LabelMe `6.3.1` 用于桌面标注；
+该环境不进入 Git。SSH 终端可做数据检查，未配置图形转发时在 P920 桌面终端打开 GUI。
+启动时应把 `--output` 明确指向**同一场景**的 `labelme_json/`；跨场景误存的 JSON
+即使复制到正确目录，也必须检查并修正其相对 `imagePath`。例如为盒外香蕉场景启动单图标注：
+
+```bash
+~/labelme-venv/bin/labelme \
+  ~/piper_tjp/data/2026-10-12/banana_into_box/scene-a03/banana-a03-001-vision-a2/images/frame_00003_1791796887379072346.jpg \
+  --labels banana,box --validate-label exact \
+  --output ~/piper_tjp/data/2026-10-12/banana_into_box/scene-a03/banana-a03-001-vision-a2/labelme_json
+```
 
 ## 5. 已准备的关节状态话题
 
