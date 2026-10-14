@@ -28,7 +28,13 @@ JOINT_TOPICS = (
     '/joint_states_teach_shared',
     '/joint_states_follower_shared',
 )
-MODES = ('static', 'demonstration')
+DIRECT_TOPICS = (
+    '/dataset/can_left/feedback_observed',
+    '/dataset/can_left/action_target',
+    '/dataset/can_left/raw_can',
+)
+RGB_TOPICS = tuple(topic for topic in CAMERA_TOPICS if '/color/' in topic)
+MODES = ('static', 'demonstration', 'direct_demonstration')
 
 
 def required_topics(mode: str) -> Tuple[str, ...]:
@@ -37,6 +43,8 @@ def required_topics(mode: str) -> Tuple[str, ...]:
         raise ValueError(f'未知录制模式：{mode}')
     if mode == 'static':
         return CAMERA_TOPICS + (MARKER_TOPIC,)
+    if mode == 'direct_demonstration':
+        return RGB_TOPICS + DIRECT_TOPICS + (MARKER_TOPIC,)
     return CAMERA_TOPICS + JOINT_TOPICS + (MARKER_TOPIC,)
 
 
@@ -98,10 +106,16 @@ def validate_episode(
         errors.append('未找到任何回合标签')
 
     expected_labels = ('start', 'note', 'end')
-    if mode == 'demonstration':
+    if mode in ('demonstration', 'direct_demonstration'):
         expected_labels = ('start', 'end')
         if not (label_counts['success'] or label_counts['failure']):
             errors.append('示教回合必须包含 success 或 failure 标签')
+        elif label_counts['success'] and label_counts['failure']:
+            errors.append('同一回合不能同时包含 success 与 failure')
+        else:
+            result_label = 'success' if label_counts['success'] else 'failure'
+            if label_counts[result_label] < 3:
+                errors.append(f'标签 {result_label} 少于 3 条可靠投递副本')
     for label in expected_labels:
         if label_counts[label] < 3:
             errors.append(f'标签 {label} 少于 3 条可靠投递副本')
@@ -128,7 +142,9 @@ def read_bag(bag_dir: Path) -> Tuple[Sequence[str], List[str]]:
     # 采集流程采用 ``--compression-mode file --compression-format zstd``。
     # SequentialCompressionReader 会按 rosbag 元数据自动解压；普通
     # SequentialReader 会把 .db3.zstd 当作 SQLite 文件，因而无法读取。
-    reader = rosbag2_py.SequentialCompressionReader()
+    metadata = rosbag2_py.Info().read_metadata(str(bag_dir), 'sqlite3')
+    reader = (rosbag2_py.SequentialCompressionReader() if metadata.compression_mode
+              else rosbag2_py.SequentialReader())
     reader.open(
         rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id='sqlite3'),
         rosbag2_py.ConverterOptions('', ''),
@@ -148,7 +164,8 @@ def read_bag(bag_dir: Path) -> Tuple[Sequence[str], List[str]]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bag_dir', type=Path, help='rosbag 目录，例如 data/.../banana-a01-001')
-    parser.add_argument('--mode', choices=MODES, required=True, help='static 或 demonstration')
+    parser.add_argument('--mode', choices=MODES, required=True,
+                        help='static、历史 demonstration 或直连 direct_demonstration')
     parser.add_argument(
         '--write-manifest', action='store_true',
         help='在 bag 目录写入 episode_manifest.json；默认只打印结果',

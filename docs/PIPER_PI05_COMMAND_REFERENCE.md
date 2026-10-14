@@ -1,10 +1,25 @@
 # Piper Pi05 指令与操作总表
 
-> 本文是当前实验机的日常操作手册。当前有效主线是“上位机示教桥”；旧的
-> piper_teleop、四路独立 ROS 节点和固件直连主从模式只用于历史追溯，不要混用。
+> 本文是当前实验机的日常操作手册。2026-10-14 用户报告学长已切回固件同总线直连模式；
+> 上位机示教桥、旧 piper_teleop 和四路独立 ROS 节点均不启动。当前准备 π0.5 的直连人工演示数据，
+> 电脑程序不发送真实 CAN 控制帧，不推进右侧真实运动；左侧跟随和夹爪开合已由用户确认。
 >
-> 文档更新时间：2026-10-08。涉及真实机械臂的命令，执行前都要确认工作空间无人、急停可达、
+> 文档更新时间：2026-10-14。涉及真实机械臂的历史或待验证命令，执行前都要确认工作空间无人、急停可达、
 > 机械臂周围没有可能被夹住的物体。
+
+> **训练路线更新：** 按学长要求准备 π0.5 动作模型微调，不再新增 LabelMe 标注或训练独立
+> 检测器。终端 09 的 LabelMe 操作保留作历史工具；下一步以第一条真实人工入盒演示检验数据。
+> 终端 07 切为 `5 Hz`，终端 06/12 保持运行；终端 08 录包、11 发标签、02 做离线检查。
+> 完整命令见[直连演示采集](PIPER_DIRECT_DEMONSTRATION.md)，不再安排重复空载试录。
+
+π0.5 直连演示的图像流在终端 07 先停止旧节点，再启动唯一进程：
+
+```bash
+ros2 run piper piper_dataset_streams --ros-args -p output_rate:=5.0 -p jpeg_quality:=85 -p enable_depth:=false
+```
+
+仅 RGB 转发，采用可靠输出和有序发布；深度驱动仍可运行，但本节点不转发深度。
+新版候选输出有连续片段 ID，模型动作序列不能跨缺帧段，详见微调路线。
 
 ## 1. 当前硬件和接口
 
@@ -32,12 +47,13 @@
 | 01-复工与状态 | 同步、编译、检查进程和 CAN | 默认不发送 |
 | 02-只读检查 | 检查使能状态、话题和帧率 | 不发送 |
 | 03-全臂控制 | 全侧软件失能工具的预演与待验证流程 | 默认不发送；真机执行须硬件负责人确认 |
-| 04-左示教桥 | 左侧上位机示教 | 加 --send 后会发送运动帧 |
-| 05-右示教桥 | 右侧上位机示教，尚未完成验证 | 加 --send 后会发送运动帧 |
+| 04-左示教桥 | 历史上位机示教；当前不启动 | 加 --send 后会发送运动帧 |
+| 05-右示教桥 | 历史上位机示教；当前不启动 | 加 --send 后会发送运动帧 |
 | 06-相机 | 启动三台相机 | 不控制机械臂 |
 | 07-训练数据流 | 相机降频、彩色 JPEG 与深度转发 | 不访问 CAN，不控制机械臂 |
 | 08-静态录包 | 录制六路图像与回合标签 | 不访问 CAN，不控制机械臂 |
 | 09-离线标注 | 在 P920 桌面使用 LabelMe 标注导出图像 | 不访问 CAN，不控制机械臂 |
+| 12-直连数据只读 | 接收直连动作目标、总线反馈与原始 CAN 帧 | 无 CAN 发送功能 |
 
 每个 ROS 终端开始前执行：
 
@@ -187,7 +203,7 @@ Piper 官方 SDK 支持 `DisableArm(7)`。原版 `piper_single_ctrl` 的 `/enabl
 
 出现 PARTIAL、UNKNOWN 或 Network is down 时，立即停止运动测试，不要继续发送 0x471。
 
-## 7. 左侧上位机示教
+## 7. 历史：左侧上位机示教（当前不执行）
 
 当前已验证左侧链路：
 
@@ -231,7 +247,7 @@ Piper 官方 SDK 支持 `DisableArm(7)`。原版 `piper_single_ctrl` 的 `/enabl
 如果 CAN 接收或发送发生异常，示教桥会记录 CAN 故障并停止继续发送运动帧；此时不要重启
 发送模式或重复发 CAN 命令，应先按安全收尾流程处理并检查 USB-CAN 稳定性。
 
-## 8. 右侧上位机示教（尚未完成验证）
+## 8. 历史：右侧上位机示教（当前不执行）
 
 右侧不能直接假定已经验证。确认右主臂进入实体示教模式、右从臂已安全使能、can_right 为
 UP 后，先在终端 05-右示教桥做干跑：
@@ -327,7 +343,7 @@ ros2 run piper piper_shared_bus_gripper_probe \
 
 ## 10. 旧方案：只作历史参考
 
-以下命令不要和当前上位机示教桥同时运行：
+当前固件直连不启动以下节点，也不在 A2 期间重新配置角色：
 
 - ros2 run piper piper_teleop
 - ros2 run piper piper_single_ctrl
@@ -378,6 +394,26 @@ origin 是用户自己的 fork，不会修改学长的 GitHub 仓库或工作区
 使用的是用户自己的 GitHub 账号。
 
 ## 13. 什么时候必须更新本文
+
+### 终端 12-直连数据只读（π0.5 数据接口准备）
+
+```bash
+cd ~/piper_tjp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run piper piper_direct_dataset_reader --can-port can_left
+```
+
+工具没有发送选项，不使能/失能机械臂；`Ctrl-C` 只停止接收。终端 02 可查看：
+
+```bash
+timeout 8 ros2 topic echo /dataset/can_left/feedback_observed sensor_msgs/msg/JointState --once
+timeout 8 ros2 topic echo /dataset/can_left/action_target sensor_msgs/msg/JointState --once
+```
+
+动作目标需有完整、新鲜的关节及夹爪目标帧才能发布；静止时没有消息不等于程序故障。
+实体未确认的反馈不能直接称为从臂状态，原始帧同时发布到 `/dataset/can_left/raw_can`。
+详细边界见[π0.5 微调路线](PIPER_PI05_TRAINING_PLAN.md)。
 
 出现以下任一情况，就要更新本文，并同时检查 docs/PROJECT_HANDOFF.md：
 

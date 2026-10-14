@@ -38,6 +38,15 @@ EXIT_FAILED = 3
 
 # 核心帧的标称帧率，仅用于判断「是否在流」，不作为严格断言。
 MIN_FRAMES = 10
+KNOWN_OTHER_IDS = {
+    0x151: '运动控制',
+    0x155: '关节目标 1/2',
+    0x156: '关节目标 3/4',
+    0x157: '关节目标 5/6',
+    0x159: '夹爪目标/状态控制',
+    0x471: '电机使能/失能设置',
+    0x476: '设置指令应答',
+}
 
 
 def _listen(port: str) -> can.BusABC:
@@ -121,7 +130,7 @@ def report(port: str, counter: Counter, last: Dict[int, bytes],
     print(f'  帧总数 {sum(counter.values())} / {duration:.1f}s，'
           f'不同 ID {len(counter)} 个')
     if offset is None:
-        print('  反馈 ID 未偏移 → 常规（运动输出臂）布局')
+        print('  反馈 ID 未偏移 → 常规反馈布局（不能据此判断主从实体）')
     else:
         shifted = sorted(c for c in counter if c - offset in CORE_FEEDBACK_CAN_IDS)
         print(f'  *** 反馈 ID 整体偏移 0x{offset:02X}，该臂处于示教输入臂布局 ***')
@@ -133,11 +142,12 @@ def report(port: str, counter: Counter, last: Dict[int, bytes],
           f'{len(CORE_FEEDBACK_CAN_IDS)} 齐全'
           + (f'，缺失 {[hex(c) for c in missing]}' if missing else ''))
     if unknown:
-        print(f'  未在 piper_sdk 定义中的额外 ID：{[hex(c) for c in unknown]}')
+        print(f'  核心反馈以外的 ID：{[hex(c) for c in unknown]}')
         for can_id in unknown:
             payload = last[can_id]
             print(f'      0x{can_id:03X} x{counter[can_id]} '
-                  f'({counter[can_id] / duration:.0f} Hz) 载荷 {payload.hex(" ")}')
+                  f'({counter[can_id] / duration:.0f} Hz) '
+                  f'{KNOWN_OTHER_IDS.get(can_id, "未分类帧")} 载荷 {payload.hex(" ")}')
 
     print(f'  关节角度  : {_angle_summary(last)}')
     print(f'  母线电压  : {_voltage_summary(last)}')

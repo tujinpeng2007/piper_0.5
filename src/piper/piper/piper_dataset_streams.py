@@ -86,6 +86,16 @@ def encode_color_jpeg(image: np.ndarray, quality: int) -> bytes:
     return encoded.tobytes()
 
 
+def output_qos(kind: str) -> QoSProfile:
+    """Buffer RGB for recording, while leaving raw depth best-effort."""
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=30 if kind == 'color' else 2,
+        reliability=ReliabilityPolicy.RELIABLE if kind == 'color' else ReliabilityPolicy.BEST_EFFORT,
+        durability=DurabilityPolicy.VOLATILE,
+    )
+
+
 class PiperDatasetStreams(Node):
     """Throttle and compress six camera streams without controlling hardware."""
 
@@ -96,13 +106,16 @@ class PiperDatasetStreams(Node):
         # explicitly, but are not the verified collection default.
         self.declare_parameter('output_rate', 5.0)
         self.declare_parameter('jpeg_quality', 90)
+        self.declare_parameter('enable_depth', True)
 
         self._output_rate = float(self.get_parameter('output_rate').value)
         self._jpeg_quality = int(self.get_parameter('jpeg_quality').value)
+        self._enable_depth = bool(self.get_parameter('enable_depth').value)
         validate_options(self._output_rate, self._jpeg_quality)
 
         self._bridge = CvBridge()
         self._last_emit: Dict[str, float] = {}
+        self._last_source_stamp: Dict[str, int] = {}
         self._schedule_lock = threading.Lock()
         self._stream_locks = {
             key: threading.Lock() for key in STREAMS
@@ -118,9 +131,11 @@ class PiperDatasetStreams(Node):
         )
 
         for key, (input_topic, output_topic, kind) in STREAMS.items():
+            if kind == 'depth' and not self._enable_depth:
+                continue
             output_type = CompressedImage if kind == 'color' else Image
             self._output_publishers[key] = self.create_publisher(
-                output_type, output_topic, camera_qos)
+                output_type, output_topic, output_qos(kind))
             self._image_subscriptions.append(self.create_subscription(
                 Image,
                 input_topic,
@@ -131,7 +146,7 @@ class PiperDatasetStreams(Node):
 
         self.get_logger().info(
             f'训练图像流：{self._output_rate:g} Hz，JPEG质量='
-            f'{self._jpeg_quality}，深度图保持原始格式')
+            f'{self._jpeg_quality}，' + ('深度图保持原始格式' if self._enable_depth else '仅发布三路 RGB'))
         self.get_logger().info(
             '本节点只读取并压缩图像，不访问 CAN，不发送机械臂控制命令')
 
@@ -140,6 +155,10 @@ class PiperDatasetStreams(Node):
         if not stream_lock.acquire(blocking=False):
             return
         try:
+            source_stamp = (message.header.stamp.sec * 1_000_000_000
+                            + message.header.stamp.nanosec)
+            if source_stamp <= self._last_source_stamp.get(key, 0):
+                return
             now = time.monotonic()
             with self._schedule_lock:
                 next_reference = next_emit_reference(
@@ -150,22 +169,25 @@ class PiperDatasetStreams(Node):
 
             if kind == 'depth':
                 self._output_publishers[key].publish(message)
+                self._last_source_stamp[key] = source_stamp
                 return
 
             image = self._bridge.imgmsg_to_cv2(
                 message, desired_encoding='bgr8')
             payload = encode_color_jpeg(image, self._jpeg_quality)
+            # Keep serialization/publication inside the stream lock so a
+            # second encoder cannot overtake the first and reverse timestamps.
+            output = CompressedImage()
+            output.header = message.header
+            output.format = 'jpeg; source_encoding=bgr8'
+            output.data = payload
+            self._output_publishers[key].publish(output)
+            self._last_source_stamp[key] = source_stamp
         except (CvBridgeError, ValueError, cv2.error) as exc:
             self.get_logger().error(f'{key} 图像压缩失败：{exc}')
             return
         finally:
             stream_lock.release()
-
-        output = CompressedImage()
-        output.header = message.header
-        output.format = 'jpeg; source_encoding=bgr8'
-        output.data = payload
-        self._output_publishers[key].publish(output)
 
 
 def main(args=None) -> None:

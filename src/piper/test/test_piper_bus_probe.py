@@ -93,3 +93,18 @@ def test_low_speed_ids_map_to_their_joint():
     for index, can_id in enumerate(FEEDBACK_CAN_IDS, start=1):
         assert joint_for_can_id(can_id) == index
     assert joint_for_can_id(HIGH_SPEED_CAN_IDS[0]) is None
+
+
+def test_report_labels_known_control_frames_and_does_not_identify_arm(capsys):
+    from collections import Counter
+    from piper.piper_bus_probe import report
+
+    counts = Counter({key: 20 for key in CORE_FEEDBACK_CAN_IDS})
+    counts[0x155] = 30
+    counts[0x471] = 2
+    report('can_left', counts, {key: bytes(8) for key in counts}, 2.0)
+    output = capsys.readouterr().out
+    assert '不能据此判断主从实体' in output
+    assert '关节目标 1/2' in output
+    assert '电机使能/失能设置' in output
+    assert '未在 piper_sdk 定义' not in output
