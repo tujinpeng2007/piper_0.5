@@ -18,6 +18,24 @@
 ros2 run piper piper_dataset_streams --ros-args -p output_rate:=5.0 -p jpeg_quality:=85 -p enable_depth:=false
 ```
 
+2026-10-26 新增图像诊断日志。需要定位间隔时，在 **07-训练数据流** 按 `Ctrl-C` 停旧实例，
+确认命令提示符返回，再执行：
+
+```bash
+cd ~/piper_tjp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run piper piper_dataset_streams --ros-args -p output_rate:=5.0 -p jpeg_quality:=85 -p enable_depth:=false -p diagnostics_period:=5.0 -p opencv_threads:=1 -p executor_threads:=1
+```
+
+06 相机与 12 直连只读保持运行，不新开第二个图像流实例。每 5 秒每路打印一条“图像诊断”，
+收集连续三轮（约 15 秒）即可开始判断；这是相机软件诊断，不是机械臂空载测试。
+输入指本节点实际收到的回调，不代表相机硬件全部生成帧；主动降频是预期行为，忙跳过和旧时间戳
+另行统计。发布耗时不是订阅端接收延迟，日志不能单独证明硬件、DDS 或磁盘根因。
+`opencv_threads:=1` 仅限制本图像流进程内 OpenCV 的线程数，用于负载对照，不修改相机驱动。
+`executor_threads:=1` 使用真正的单线程 ROS 执行器；旧的六线程方式可用
+`executor_threads:=6` 恢复。当前对照未证明修复，不能据此开始自主运动。
+
 仅 RGB 转发，采用可靠输出和有序发布；深度驱动仍可运行，但本节点不转发深度。
 新版候选输出有连续片段 ID，模型动作序列不能跨缺帧段，详见微调路线。
 
