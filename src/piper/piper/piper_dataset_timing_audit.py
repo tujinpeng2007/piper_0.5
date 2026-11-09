@@ -35,6 +35,34 @@ def isolated_bag_for_read(bag_dir, metadata):
         yield copied
 
 
+def _select_action_indices(observation, action_stamps, step, horizon, max_age_ns, end_ns):
+    """Return source indices or a rejection reason for one validated time grid."""
+    stop = observation + (horizon - 1) * step
+    if stop > end_ns:
+        return None, '超过结果标签'
+    if not action_stamps or stop > action_stamps[-1]:
+        return None, '超出动作数据末尾'
+    first = bisect.bisect_right(action_stamps, observation) - 1
+    last = bisect.bisect_right(action_stamps, stop) - 1
+    if first < 0:
+        return None, '缺少初始动作'
+    has_gap = any(action_stamps[i + 1] - action_stamps[i] > max_age_ns
+                  for i in range(first, last))
+    if (action_stamps[last] < stop and last + 1 < len(action_stamps)
+            and action_stamps[last + 1] - action_stamps[last] > max_age_ns):
+        has_gap = True
+    if has_gap:
+        return None, '动作源存在较长间隔'
+    selected = []
+    for k in range(horizon):
+        sample_ns = observation + k * step
+        index = bisect.bisect_right(action_stamps, sample_ns) - 1
+        if index < 0 or sample_ns - action_stamps[index] > max_age_ns:
+            return None, '动作过期'
+        selected.append(index)
+    return selected, None
+
+
 def inspect_action_windows(observation_stamps, action_stamps, *, fps, horizon,
                            max_age_ns=100_000_000, end_ns):
     """Count hypothetical windows; each target is bounded to past recorded data.
@@ -56,36 +84,10 @@ def inspect_action_windows(observation_stamps, action_stamps, *, fps, horizon,
     max_used_age_ns = 0
     repeated_sources = 0
     for observation in observation_stamps:
-        stop = observation + (horizon - 1) * step
-        if stop > end_ns:
-            reasons['超过结果标签'] += 1
-            continue
-        if not action_stamps or stop > action_stamps[-1]:
-            reasons['超出动作数据末尾'] += 1
-            continue
-        first = bisect.bisect_right(action_stamps, observation) - 1
-        last = bisect.bisect_right(action_stamps, stop) - 1
-        if first < 0:
-            reasons['缺少初始动作'] += 1
-            continue
-        has_gap = any(action_stamps[i + 1] - action_stamps[i] > max_age_ns
-                      for i in range(first, last))
-        # Also reject when the window ends inside an observed long source gap.
-        if (action_stamps[last] < stop and last + 1 < len(action_stamps)
-                and action_stamps[last + 1] - action_stamps[last] > max_age_ns):
-            has_gap = True
-        if has_gap:
-            reasons['动作源存在较长间隔'] += 1
-            continue
-        selected = []
-        for k in range(horizon):
-            sample_ns = observation + k * step
-            index = bisect.bisect_right(action_stamps, sample_ns) - 1
-            if index < 0 or sample_ns - action_stamps[index] > max_age_ns:
-                break
-            selected.append(index)
-        if len(selected) != horizon:
-            reasons['动作过期'] += 1
+        selected, reason = _select_action_indices(
+            observation, action_stamps, step, horizon, max_age_ns, end_ns)
+        if reason:
+            reasons[reason] += 1
             continue
         valid += 1
         repeated_sources += len(selected) - len(set(selected))

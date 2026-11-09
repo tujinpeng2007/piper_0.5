@@ -59,3 +59,61 @@ ros2 run piper piper_dataset_timing_audit \
 
 工具检查清单和 rosbag 来源是否相符、回合标签和话题是否完整，并打印各节拍下的覆盖/排除原因。
 输出 `audit_only=true`、`training_ready=false`；无论覆盖数量多少，都不会标记为训练就绪。
+
+## 单个输入的离线格式预览
+
+2026-11-09 新增 `piper_dataset_sample_preview`，只在内存组合一个图像、状态和动作窗口，
+检查维度与相机映射，并输出原始观测和动作源时间戳。它与覆盖审计共用窗口选择规则，
+拒绝跨结果标签、超出动作尾部、过期或横跨超过 100ms 源间隔的窗口；不写样本文件。
+
+例如以下 `20Hz` 仅为假设，不是机械臂设置或最终训练节拍：
+
+```bash
+cd ~/piper_tjp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run piper piper_dataset_sample_preview \
+  data/2026-10-26/banana_into_box/scene-a06/banana-direct-a06-002 \
+  data/2026-10-26/banana_into_box/scene-a06/banana-direct-a06-002-candidate-v2 \
+  --action-fps 20
+```
+
+真实包的首次预览得到候选索引 10：三张 RGB，状态形状 `7`、动作形状 `50×7`；目标最老
+`55.69ms`，有 1 次复用同一近期目标。预览不证明固件持续保持该目标，不将样本标为可训练；
+不同节拍和数据目录必须重新核对，正式推理和运动控制仍需独立设计与验收。
+
+2026-11-09 后续新增 `DiagnosticEpisode` 离线逐条加载器及 `--check-all` 模式。每个窗口检查：
+候选 JPEG 与其时间戳对应的原包 JPEG 逐字节一致、候选状态与原包该时刻反馈一致、图像与状态
+未使用未来或过期数据、动作时间不跨越长目标间隔，且输出的源时间戳可追溯。它使用三个实际
+回合，在假设 20Hz 条件下逐条读取了 `49 / 95 / 61` 个时间覆盖窗口，共 `205` 个重叠窗口；
+三回合分别复用近期目标 `13 / 4 / 3` 次。没有导出训练集或对机械臂发送命令。
+
+可将上面的单条预览命令末尾改为 `--action-fps 20 --check-all`，检查该回合全部覆盖窗口。
+该检查只证明被检查窗口与录包一致，不证明录包的反馈实体、目标保持语义或夹爪执行映射正确。
+不同回合的相同场景不得拆分到训练与验证集。
+
+## 训练环境的 Python 边界
+
+2026-11-09 本机 ROS 2 Humble 使用系统 Python 3.10；当日查看的官方 openpi `main` 的
+[`pyproject.toml`](https://github.com/Physical-Intelligence/openpi/blob/main/pyproject.toml) 要求
+Python `>=3.11`。当前逐条加载器依赖 ROS 2 Python 消息与 `rosbag2_py`，不能假定它可直接运行在
+独立 openpi 环境。后续应先固定官方源码版本，在 ROS 3.10 环境导出带完整源时间戳的中间文件，
+再由独立训练环境读取并进行 LeRobot / openpi 对接；保持中间文件为诊断用途，直到真实动作语义和
+数据质量通过验收。不得修改系统 Python 来适配 openpi。
+
+## 跨环境诊断副本（不是训练集）
+
+已为 `a06-002` 在 ROS 环境中生成 v2 诊断副本，位于
+`data/2026-10-26/banana_into_box/scene-a06/banana-direct-a06-002-diagnostic-portable-20hz-v2/`。
+其中有 61 个**重叠窗口**、183 张 JPEG，以及状态、动作、场景和逐项源时间戳；总计约 9.2MiB。
+数组与每张图片附带 SHA-256 校验值，清单强制 `diagnostic_only=true`、`training_ready=false`。
+目录已被 Git 忽略。原包及候选没有覆盖；首版 v1 诊断副本也保留，当前读取器使用带数组校验的 v2。
+
+在临时 Python `3.11.17` 虚拟环境中，仅安装 NumPy `1.26.4` 和 Pillow `13.0.0` 后，独立读取器
+`piper.piper_diagnostic_portable` 已逐条检查 v2 全部 61 窗口，并确认未导入 `rclpy` 或
+`rosbag2_py`。临时环境位于 `/tmp`，可能随重启消失；它不是 openpi 训练环境，未安装模型依赖。
+导出器拒绝覆盖已存在的目录；若写入中途中断，会保留不完整目录，必须另选新目录，不能当作合格数据。
+
+读取器检查字段、图像和数组校验值、时间网格及 100ms 新鲜度，并保留相机和动作源时间戳。
+校验值用于发现副本意外变化，不能证明真实反馈实体归属或固件保持语义。动作频率 `20Hz` 仍仅为
+试验假设；未进行 LeRobot 转换、openpi 联调、训练或真机控制。

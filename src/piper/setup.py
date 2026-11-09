@@ -41,6 +41,8 @@ setup(
             'piper_direct_dataset_reader = piper.piper_direct_dataset_reader:main',
             'piper_direct_dataset_prepare = piper.piper_direct_dataset_prepare:main',
             'piper_dataset_timing_audit = piper.piper_dataset_timing_audit:main',
+            'piper_dataset_sample_preview = piper.piper_dataset_sample_preview:main',
+            'piper_diagnostic_export = piper.piper_diagnostic_export:main',
             'piper_direct_role_config = piper.piper_direct_role_config:main',
             'piper_teach_reader = piper.piper_teach_reader:main',
             'piper_teach_follow = piper.piper_teach_follow:main',
